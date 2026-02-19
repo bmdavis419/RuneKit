@@ -1,0 +1,11 @@
+{
+	"files.associations": {
+		"*.css": "tailwindcss"
+	},
+	"workbench.colorCustomizations": {
+		"titleBar.activeBackground": "#FF815A",
+		"titleBar.inactiveBackground": "#FF815A",
+		"titleBar.activeForeground": "#FFFFFF",
+		"titleBar.inactiveForeground": "#FFFFFF"
+	}
+}
