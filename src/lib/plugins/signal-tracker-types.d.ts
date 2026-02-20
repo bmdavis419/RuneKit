@@ -33,6 +33,19 @@ declare module 'virtual:signal-tracker' {
 		downstream: SignalReactionUpdate[];
 	}
 
+	export interface SignalReadEvent {
+		label: string | undefined;
+		timestamp: number;
+		sourceChain: string | undefined;
+	}
+
+	export interface SignalWriteEvent {
+		label: string | undefined;
+		operation: SignalMutationSource['operation'];
+		timestamp: number;
+		sourceChain: string | undefined;
+	}
+
 	export type Unsubscribe = () => void;
 
 	/**
@@ -40,6 +53,11 @@ declare module 'virtual:signal-tracker' {
 	 * Returns an unsubscribe function — pass it as the return value of onMount.
 	 */
 	export function onSignalChange(handler: (event: SignalChangeEvent) => void): Unsubscribe;
+	export function onSignalRead(handler: (event: SignalReadEvent) => void): Unsubscribe;
+	export function onSignalWrite(handler: (event: SignalWriteEvent) => void): Unsubscribe;
+	export function setRerenderFlashEnabled(enabled: boolean): void;
+	export function getRerenderFlashEnabled(): boolean;
+	export function registerFlashExclusionRoot(element: Element): Unsubscribe;
 
 	/** @internal injected into compiled Svelte output by vite-plugin-signal-tracker */
 	export function __emit(event: SignalChangeEvent): void;

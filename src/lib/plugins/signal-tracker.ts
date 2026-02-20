@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import type { Plugin } from 'vite';
 
 const VIRTUAL_ID = 'virtual:signal-tracker';
@@ -14,9 +12,12 @@ const TRACKED_FNS = `new Set(['set','update','update_pre','mutate'])`;
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const RUNTIME_MODULE_URL = new URL('./signal-tracker-runtime.js', import.meta.url);
-const RUNTIME_MODULE_PATH = fileURLToPath(RUNTIME_MODULE_URL);
+const RUNTIME_MODULE_PATH = decodeURIComponent(RUNTIME_MODULE_URL.pathname);
 
-const loadRuntimeModule = () => readFileSync(RUNTIME_MODULE_PATH, 'utf8');
+const loadRuntimeModule = async () => {
+	const { readFile } = await import('node:fs/promises');
+	return readFile(RUNTIME_MODULE_URL, 'utf8');
+};
 
 export function signalTracker(): Plugin {
 	console.log('[signal-tracker] plugin created');
@@ -32,7 +33,7 @@ export function signalTracker(): Plugin {
 			}
 		},
 
-		load(id) {
+		async load(id) {
 			if (id === RESOLVED_ID) {
 				console.log('[signal-tracker] loading virtual module');
 				this.addWatchFile(RUNTIME_MODULE_PATH);
@@ -90,12 +91,16 @@ import {
   __finalizeDownstream as __stFinalizeDownstream,
   __flashDomByOperation as __stFlashDomByOperation,
   __setActiveSourceLabel as __stSetActiveSourceLabel,
+  __emitRead as __stEmitRead,
+  __emitWrite as __stEmitWrite,
   __beginReadLabel as __stBeginReadLabel,
   __endReadLabel as __stEndReadLabel,
   __takeReadChain as __stTakeReadChain,
   __sourceChain as __stSourceChain
 } from '${VIRTUAL_ID}';
 const _tracked = ${TRACKED_FNS};
+const _isInternalLabel = (label) =>
+  typeof label === 'string' && (label.startsWith('monitor_') || label.startsWith('__st'));
 const _flashOps = new Set([
   'set_text',
   'set_value',
@@ -111,6 +116,7 @@ const ${alias} = new Proxy(${origAlias}, {
     const _value = t[p];
     if (_tracked.has(p)) {
       return (src, ...args) => {
+        if (_isInternalLabel(src?.label)) return _value(src, ...args);
         __stSetActiveSourceLabel(src?.label);
         const _ov = src?.v;
         const _wv = src?.wv;
@@ -119,6 +125,7 @@ const ${alias} = new Proxy(${origAlias}, {
         const _downstream = __stSnapshotDownstream(src);
         const _r = _value(src, ...args);
         if (src?.wv !== _wv && !__stIsEmitting()) {
+          const _sourceChain = __stSourceChain();
           const _dispatch = () =>
             __stEmit({
               label: src?.label,
@@ -128,6 +135,12 @@ const ${alias} = new Proxy(${origAlias}, {
               mutation: _mutation,
               downstream: __stFinalizeDownstream(_downstream)
             });
+          __stEmitWrite({
+            label: src?.label,
+            operation: _op,
+            timestamp: Date.now(),
+            sourceChain: _sourceChain
+          });
           if (typeof queueMicrotask === 'function') queueMicrotask(_dispatch);
           else Promise.resolve().then(_dispatch);
         }
@@ -137,11 +150,19 @@ const ${alias} = new Proxy(${origAlias}, {
 
     if (p === 'get' && typeof _value === 'function') {
       return (signal, ...args) => {
-        __stBeginReadLabel(signal?.label);
+        if (_isInternalLabel(signal?.label)) return _value(signal, ...args);
+        const _isTopLevelRead = __stBeginReadLabel(signal?.label);
         try {
           return _value(signal, ...args);
         } finally {
           __stEndReadLabel();
+          if (_isTopLevelRead) {
+            __stEmitRead({
+              label: signal?.label,
+              timestamp: Date.now(),
+              sourceChain: __stSourceChain([signal?.label])
+            });
+          }
         }
       };
     }

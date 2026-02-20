@@ -8,9 +8,9 @@
 
 	let name = $state('world');
 	// The re-entrancy guard in __emit prevents this from causing a feedback loop:
-	// when the handler updates `events`, our proxy intercepts the $.set call but
+	// when the handler updates this internal buffer, our proxy intercepts the $.set call but
 	// __emit skips it because _active is already true.
-	let events = $state<SignalChangeEvent[]>([]);
+	let __st_ignore_monitor_feed_events_buffer_7f5c11 = $state<SignalChangeEvent[]>([]);
 
 	const stringify = (value: unknown) => {
 		try {
@@ -42,7 +42,10 @@
 	onMount(() => {
 		return onSignalChange((e) => {
 			console.log('[signal-tracker]', e);
-			events = [e, ...events].slice(0, 30);
+			__st_ignore_monitor_feed_events_buffer_7f5c11 = [
+				e,
+				...__st_ignore_monitor_feed_events_buffer_7f5c11
+			].slice(0, 30);
 		});
 	});
 </script>
@@ -69,7 +72,7 @@
 	<h2 class="mb-2 text-sm font-semibold text-slate-500">signal events (last 30)</h2>
 
 	<!-- <ul class="space-y-1 text-sm">
-		{#each events as e, i (`${e.timestamp}:${e.label ?? 'unknown'}:${i}`)}
+		{#each __st_ignore_monitor_feed_events_buffer_7f5c11 as e, i (`${e.timestamp}:${e.label ?? 'unknown'}:${i}`)}
 			<li class="rounded bg-slate-100 px-3 py-2">
 				<span class="font-semibold text-blue-700">{e.label ?? '(unlabeled)'}</span>
 				<span class="text-slate-400"> · </span>

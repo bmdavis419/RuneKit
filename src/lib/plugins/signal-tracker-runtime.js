@@ -2,10 +2,14 @@
 
 console.log('[signal-tracker] virtual module loaded');
 const _listeners = new Set();
+const _readListeners = new Set();
+const _writeListeners = new Set();
 let _active = false;
 const _stackIgnore = ['virtual:signal-tracker', '__st', 'svelte/internal/client'];
 const _flashClass = '__signal_tracker_flash';
 let _flashStyleReady = false;
+let _rerenderFlashEnabled = true;
+const _flashExclusionRoots = new Set();
 let _activeSourceLabel = undefined;
 let _activeSourceExpiresAt = 0;
 const _sourceLabelTTL = 1500;
@@ -20,7 +24,7 @@ const _fnName = (value) =>
 	typeof value?.name === 'string' && value.name.length > 0 ? value.name : undefined;
 const _extractFrames = (stack) =>
 	stack
-		?.split('\\n')
+		?.split('\n')
 		.slice(1)
 		.map((line) => line.trim()) ?? [];
 const _firstExternalFrame = (frames) =>
@@ -55,9 +59,16 @@ const _toFlashElement = (value) => {
 
 const _flash = (value, sourceLabel) => {
 	const element = _toFlashElement(value);
-	if (!element) return;
+	if (!element || !sourceLabel) return;
+	for (const root of _flashExclusionRoots) {
+		if (root?.contains?.(element)) return;
+	}
+	if (
+		typeof element.closest === 'function' &&
+		element.closest('[data-signal-tracker-monitor="true"]')
+	)
+		return;
 	_ensureFlashStyle();
-	if (!sourceLabel) return;
 	element.setAttribute('data-signal-tracker-source', sourceLabel);
 	element.classList.add(_flashClass);
 	setTimeout(() => {
@@ -66,10 +77,44 @@ const _flash = (value, sourceLabel) => {
 	}, 1000);
 };
 
+const _safeEmit = (listeners, event) => {
+	for (const handler of listeners) {
+		try {
+			handler(event);
+		} catch (e) {
+			console.error('[signal-tracker]', e);
+		}
+	}
+};
+
 export function onSignalChange(handler) {
 	console.log('[signal-tracker] onSignalChange registered');
 	_listeners.add(handler);
 	return () => _listeners.delete(handler);
+}
+
+export function onSignalRead(handler) {
+	_readListeners.add(handler);
+	return () => _readListeners.delete(handler);
+}
+
+export function onSignalWrite(handler) {
+	_writeListeners.add(handler);
+	return () => _writeListeners.delete(handler);
+}
+
+export function setRerenderFlashEnabled(enabled) {
+	_rerenderFlashEnabled = Boolean(enabled);
+}
+
+export function getRerenderFlashEnabled() {
+	return _rerenderFlashEnabled;
+}
+
+export function registerFlashExclusionRoot(element) {
+	if (!element || typeof element.contains !== 'function') return () => {};
+	_flashExclusionRoots.add(element);
+	return () => _flashExclusionRoots.delete(element);
 }
 
 export function __isEmitting() {
@@ -134,6 +179,7 @@ export function __finalizeDownstream(snapshot) {
 }
 
 export function __flashDomByOperation(operation, args, label) {
+	if (!_rerenderFlashEnabled) return;
 	if (typeof operation !== 'string' || !Array.isArray(args) || args.length === 0) return;
 	if (typeof label !== 'string' || label.length === 0) return;
 	if (operation === 'set_text') {
@@ -161,9 +207,12 @@ export function __setActiveSourceLabel(label) {
 
 export function __beginReadLabel(label) {
 	_readDepth += 1;
-	if (_readDepth === 1) _readStack = [];
-	if (typeof label !== 'string' || label.length === 0) return;
-	_readStack.push(label);
+	const isTopLevel = _readDepth === 1;
+	if (isTopLevel) _readStack = [];
+	if (typeof label === 'string' && label.length > 0) {
+		_readStack.push(label);
+	}
+	return isTopLevel;
 }
 
 export function __endReadLabel() {
@@ -196,7 +245,10 @@ export function __takeReadChain() {
 
 const _truncateChain = (nodes, maxNodes = 4) => {
 	if (!Array.isArray(nodes) || nodes.length <= maxNodes) return nodes;
-	return [nodes[0], nodes[1], '...', nodes[nodes.length - 2], nodes[nodes.length - 1]];
+	if (maxNodes < 2) return [nodes[0], '...'];
+	const tailSize = Math.max(1, Math.floor((maxNodes - 1) / 2));
+	const headSize = Math.max(1, maxNodes - tailSize);
+	return [...nodes.slice(0, headSize), '...', ...nodes.slice(nodes.length - tailSize)];
 };
 
 export function __sourceChain(readChain) {
@@ -210,6 +262,14 @@ export function __sourceChain(readChain) {
 	return _truncateChain(chain, 4).join(' > ');
 }
 
+export function __emitRead(event) {
+	_safeEmit(_readListeners, event);
+}
+
+export function __emitWrite(event) {
+	_safeEmit(_writeListeners, event);
+}
+
 /** @internal – injected into compiled Svelte output by vite-plugin-signal-tracker */
 export function __emit(event) {
 	// Re-entrancy guard: if the handler itself updates $state we skip that
@@ -218,13 +278,7 @@ export function __emit(event) {
 	__setActiveSourceLabel(event?.label);
 	_active = true;
 	try {
-		for (const handler of _listeners) {
-			try {
-				handler(event);
-			} catch (e) {
-				console.error('[signal-tracker]', e);
-			}
-		}
+		_safeEmit(_listeners, event);
 	} finally {
 		_active = false;
 	}
