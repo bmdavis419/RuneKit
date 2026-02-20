@@ -1,0 +1,231 @@
+// @ts-nocheck
+
+console.log('[signal-tracker] virtual module loaded');
+const _listeners = new Set();
+let _active = false;
+const _stackIgnore = ['virtual:signal-tracker', '__st', 'svelte/internal/client'];
+const _flashClass = '__signal_tracker_flash';
+let _flashStyleReady = false;
+let _activeSourceLabel = undefined;
+let _activeSourceExpiresAt = 0;
+const _sourceLabelTTL = 1500;
+let _lastReadChain = undefined;
+let _lastReadAt = 0;
+const _readLabelTTL = 100;
+let _readDepth = 0;
+let _readStack = [];
+
+const _isReaction = (value) => value && typeof value === 'object' && typeof value.wv === 'number';
+const _fnName = (value) =>
+	typeof value?.name === 'string' && value.name.length > 0 ? value.name : undefined;
+const _extractFrames = (stack) =>
+	stack
+		?.split('\\n')
+		.slice(1)
+		.map((line) => line.trim()) ?? [];
+const _firstExternalFrame = (frames) =>
+	frames.find((line) => !_stackIgnore.some((token) => line.includes(token)));
+const _isElement = (value) => typeof Element !== 'undefined' && value instanceof Element;
+const _isText = (value) => typeof Text !== 'undefined' && value instanceof Text;
+const _currentSourceLabel = () =>
+	typeof _activeSourceLabel === 'string' && _activeSourceExpiresAt > Date.now()
+		? _activeSourceLabel
+		: undefined;
+
+const _ensureFlashStyle = () => {
+	if (_flashStyleReady || typeof document === 'undefined') return;
+	_flashStyleReady = true;
+	const style = document.createElement('style');
+	style.setAttribute('data-signal-tracker-flash', 'true');
+	style.textContent =
+		'.' +
+		_flashClass +
+		'{outline:2px solid #fb923c;outline-offset:2px;transition:outline-color .2s ease;position:relative}' +
+		'.' +
+		_flashClass +
+		'::after{content:attr(data-signal-tracker-source);position:absolute;left:0;top:-1.15rem;background:#fb923c;color:#111827;font:600 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;padding:1px 6px;border-radius:4px;pointer-events:none;white-space:nowrap;z-index:2147483647}';
+	document.head?.appendChild(style);
+};
+
+const _toFlashElement = (value) => {
+	if (_isElement(value)) return value;
+	if (_isText(value)) return value.parentElement;
+	return undefined;
+};
+
+const _flash = (value, sourceLabel) => {
+	const element = _toFlashElement(value);
+	if (!element) return;
+	_ensureFlashStyle();
+	if (!sourceLabel) return;
+	element.setAttribute('data-signal-tracker-source', sourceLabel);
+	element.classList.add(_flashClass);
+	setTimeout(() => {
+		element.classList.remove(_flashClass);
+		element.removeAttribute('data-signal-tracker-source');
+	}, 1000);
+};
+
+export function onSignalChange(handler) {
+	console.log('[signal-tracker] onSignalChange registered');
+	_listeners.add(handler);
+	return () => _listeners.delete(handler);
+}
+
+export function __isEmitting() {
+	return _active;
+}
+
+export function __mutationMeta(operation) {
+	const frames = _extractFrames(new Error().stack);
+	return {
+		operation,
+		callsite: _firstExternalFrame(frames),
+		stack: frames.slice(0, 6).join('\\n') || undefined
+	};
+}
+
+export function __snapshotDownstream(source) {
+	if (!Array.isArray(source?.reactions) || source.reactions.length === 0) return [];
+
+	const queue = [...source.reactions];
+	const visited = new Set();
+	const records = [];
+
+	while (queue.length > 0) {
+		const reaction = queue.shift();
+		if (!_isReaction(reaction) || visited.has(reaction)) continue;
+		visited.add(reaction);
+
+		const isDerived = 'reactions' in reaction && 'v' in reaction;
+		records.push({
+			reaction,
+			kind: isDerived ? 'derived' : 'effect',
+			label: typeof reaction.label === 'string' ? reaction.label : undefined,
+			fnName: _fnName(reaction.fn),
+			componentName: _fnName(reaction.component_function ?? reaction.ctx?.function),
+			writeVersionBefore: reaction.wv
+		});
+
+		if (isDerived && Array.isArray(reaction.reactions)) {
+			for (const next of reaction.reactions) queue.push(next);
+		}
+	}
+
+	return records;
+}
+
+export function __finalizeDownstream(snapshot) {
+	return (Array.isArray(snapshot) ? snapshot : []).map((record) => {
+		const writeVersionAfter = _isReaction(record.reaction) ? record.reaction.wv : undefined;
+		return {
+			kind: record.kind,
+			label: record.label,
+			fnName: record.fnName,
+			componentName: record.componentName,
+			writeVersionBefore: record.writeVersionBefore,
+			writeVersionAfter,
+			updated:
+				typeof record.writeVersionBefore === 'number' &&
+				typeof writeVersionAfter === 'number' &&
+				writeVersionAfter !== record.writeVersionBefore
+		};
+	});
+}
+
+export function __flashDomByOperation(operation, args, label) {
+	if (typeof operation !== 'string' || !Array.isArray(args) || args.length === 0) return;
+	if (typeof label !== 'string' || label.length === 0) return;
+	if (operation === 'set_text') {
+		_flash(args[0], label);
+		return;
+	}
+	if (
+		operation === 'set_value' ||
+		operation === 'set_checked' ||
+		operation === 'set_selected' ||
+		operation === 'set_attribute' ||
+		operation === 'set_xlink_attribute' ||
+		operation === 'set_class' ||
+		operation === 'set_style'
+	) {
+		_flash(args[0], label);
+	}
+}
+
+export function __setActiveSourceLabel(label) {
+	if (typeof label !== 'string' || label.length === 0) return;
+	_activeSourceLabel = label;
+	_activeSourceExpiresAt = Date.now() + _sourceLabelTTL;
+}
+
+export function __beginReadLabel(label) {
+	_readDepth += 1;
+	if (_readDepth === 1) _readStack = [];
+	if (typeof label !== 'string' || label.length === 0) return;
+	_readStack.push(label);
+}
+
+export function __endReadLabel() {
+	if (_readDepth === 0) return;
+	_readDepth -= 1;
+	if (_readDepth !== 0) return;
+	const chain = [];
+	const seen = new Set();
+	for (let i = _readStack.length - 1; i >= 0; i -= 1) {
+		const label = _readStack[i];
+		if (seen.has(label)) continue;
+		seen.add(label);
+		chain.push(label);
+	}
+	_lastReadChain = chain.length > 0 ? chain : undefined;
+	_lastReadAt = Date.now();
+	_readStack = [];
+}
+
+export function __takeReadChain() {
+	if (!Array.isArray(_lastReadChain) || _lastReadChain.length === 0) return undefined;
+	if (Date.now() - _lastReadAt > _readLabelTTL) {
+		_lastReadChain = undefined;
+		return undefined;
+	}
+	const chain = _lastReadChain;
+	_lastReadChain = undefined;
+	return chain;
+}
+
+const _truncateChain = (nodes, maxNodes = 4) => {
+	if (!Array.isArray(nodes) || nodes.length <= maxNodes) return nodes;
+	return [nodes[0], nodes[1], '...', nodes[nodes.length - 2], nodes[nodes.length - 1]];
+};
+
+export function __sourceChain(readChain) {
+	const source = _currentSourceLabel();
+	if (!source) return undefined;
+	const chain = Array.isArray(readChain)
+		? readChain.filter((label) => typeof label === 'string' && label.length > 0)
+		: [];
+	if (chain.length === 0) return source;
+	if (chain[0] !== source) chain.unshift(source);
+	return _truncateChain(chain, 4).join(' > ');
+}
+
+/** @internal – injected into compiled Svelte output by vite-plugin-signal-tracker */
+export function __emit(event) {
+	// Re-entrancy guard: if the handler itself updates $state we skip that
+	// secondary emission so we don't loop.
+	if (_active) return;
+	__setActiveSourceLabel(event?.label);
+	_active = true;
+	try {
+		for (const handler of _listeners) {
+			try {
+				handler(event);
+			} catch (e) {
+				console.error('[signal-tracker]', e);
+			}
+		}
+	} finally {
+		_active = false;
+	}
+}

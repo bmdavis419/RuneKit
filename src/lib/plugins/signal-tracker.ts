@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type { Plugin } from 'vite';
 
 const VIRTUAL_ID = 'virtual:signal-tracker';
@@ -11,100 +13,10 @@ const RESOLVED_ID = '\0virtual:signal-tracker';
 const TRACKED_FNS = `new Set(['set','update','update_pre','mutate'])`;
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-const VIRTUAL_MODULE = /* js */ `
-console.log('[signal-tracker] virtual module loaded');
-const _listeners = new Set();
-let _active = false;
-const _stackIgnore = ['virtual:signal-tracker', '__st', 'svelte/internal/client'];
+const RUNTIME_MODULE_URL = new URL('./signal-tracker-runtime.js', import.meta.url);
+const RUNTIME_MODULE_PATH = fileURLToPath(RUNTIME_MODULE_URL);
 
-const _isReaction = (value) => value && typeof value === 'object' && typeof value.wv === 'number';
-const _fnName = (value) => (typeof value?.name === 'string' && value.name.length > 0 ? value.name : undefined);
-const _extractFrames = (stack) => stack?.split('\\n').slice(1).map((line) => line.trim()) ?? [];
-const _firstExternalFrame = (frames) =>
-  frames.find((line) => !_stackIgnore.some((token) => line.includes(token)));
-
-export function onSignalChange(handler) {
-  console.log('[signal-tracker] onSignalChange registered');
-  _listeners.add(handler);
-  return () => _listeners.delete(handler);
-}
-
-export function __isEmitting() {
-  return _active;
-}
-
-export function __mutationMeta(operation) {
-  const frames = _extractFrames(new Error().stack);
-  return {
-    operation,
-    callsite: _firstExternalFrame(frames),
-    stack: frames.slice(0, 6).join('\\n') || undefined
-  };
-}
-
-export function __snapshotDownstream(source) {
-  if (!Array.isArray(source?.reactions) || source.reactions.length === 0) return [];
-
-  const queue = [...source.reactions];
-  const visited = new Set();
-  const records = [];
-
-  while (queue.length > 0) {
-    const reaction = queue.shift();
-    if (!_isReaction(reaction) || visited.has(reaction)) continue;
-    visited.add(reaction);
-
-    const isDerived = 'reactions' in reaction && 'v' in reaction;
-    records.push({
-      reaction,
-      kind: isDerived ? 'derived' : 'effect',
-      label: typeof reaction.label === 'string' ? reaction.label : undefined,
-      fnName: _fnName(reaction.fn),
-      componentName: _fnName(reaction.component_function ?? reaction.ctx?.function),
-      writeVersionBefore: reaction.wv
-    });
-
-    if (isDerived && Array.isArray(reaction.reactions)) {
-      for (const next of reaction.reactions) queue.push(next);
-    }
-  }
-
-  return records;
-}
-
-export function __finalizeDownstream(snapshot) {
-  return (Array.isArray(snapshot) ? snapshot : []).map((record) => {
-    const writeVersionAfter = _isReaction(record.reaction) ? record.reaction.wv : undefined;
-    return {
-      kind: record.kind,
-      label: record.label,
-      fnName: record.fnName,
-      componentName: record.componentName,
-      writeVersionBefore: record.writeVersionBefore,
-      writeVersionAfter,
-      updated:
-        typeof record.writeVersionBefore === 'number' &&
-        typeof writeVersionAfter === 'number' &&
-        writeVersionAfter !== record.writeVersionBefore
-    };
-  });
-}
-
-/** @internal – injected into compiled Svelte output by vite-plugin-signal-tracker */
-export function __emit(event) {
-  // Re-entrancy guard: if the handler itself updates $state we skip that
-  // secondary emission so we don't loop.
-  if (_active) return;
-  _active = true;
-  try {
-    for (const handler of _listeners) {
-      try { handler(event); } catch (e) { console.error('[signal-tracker]', e); }
-    }
-  } finally {
-    _active = false;
-  }
-}
-`.trim();
+const loadRuntimeModule = () => readFileSync(RUNTIME_MODULE_PATH, 'utf8');
 
 export function signalTracker(): Plugin {
 	console.log('[signal-tracker] plugin created');
@@ -123,7 +35,8 @@ export function signalTracker(): Plugin {
 		load(id) {
 			if (id === RESOLVED_ID) {
 				console.log('[signal-tracker] loading virtual module');
-				return VIRTUAL_MODULE;
+				this.addWatchFile(RUNTIME_MODULE_PATH);
+				return loadRuntimeModule();
 			}
 		},
 
@@ -174,32 +87,71 @@ import {
   __isEmitting as __stIsEmitting,
   __mutationMeta as __stMutationMeta,
   __snapshotDownstream as __stSnapshotDownstream,
-  __finalizeDownstream as __stFinalizeDownstream
+  __finalizeDownstream as __stFinalizeDownstream,
+  __flashDomByOperation as __stFlashDomByOperation,
+  __setActiveSourceLabel as __stSetActiveSourceLabel,
+  __beginReadLabel as __stBeginReadLabel,
+  __endReadLabel as __stEndReadLabel,
+  __takeReadChain as __stTakeReadChain,
+  __sourceChain as __stSourceChain
 } from '${VIRTUAL_ID}';
 const _tracked = ${TRACKED_FNS};
+const _flashOps = new Set([
+  'set_text',
+  'set_value',
+  'set_checked',
+  'set_selected',
+  'set_attribute',
+  'set_xlink_attribute',
+  'set_class',
+  'set_style'
+]);
 const ${alias} = new Proxy(${origAlias}, {
   get(t, p) {
-    if (!_tracked.has(p)) return t[p];
-    return (src, ...args) => {
-      const _ov = src?.v;
-      const _wv = src?.wv;
-      const _op = typeof p === 'string' ? p : String(p);
-      const _mutation = __stMutationMeta(_op);
-      const _downstream = __stSnapshotDownstream(src);
-      const _r = t[p](src, ...args);
-      if (src?.wv !== _wv && !__stIsEmitting()) {
-        const _dispatch = () =>
-          __stEmit({
-            label: src?.label,
-            oldValue: _ov,
-            newValue: src?.v,
-            timestamp: Date.now(),
-            mutation: _mutation,
-            downstream: __stFinalizeDownstream(_downstream)
-          });
-        if (typeof queueMicrotask === 'function') queueMicrotask(_dispatch);
-        else Promise.resolve().then(_dispatch);
-      }
+    const _value = t[p];
+    if (_tracked.has(p)) {
+      return (src, ...args) => {
+        __stSetActiveSourceLabel(src?.label);
+        const _ov = src?.v;
+        const _wv = src?.wv;
+        const _op = typeof p === 'string' ? p : String(p);
+        const _mutation = __stMutationMeta(_op);
+        const _downstream = __stSnapshotDownstream(src);
+        const _r = _value(src, ...args);
+        if (src?.wv !== _wv && !__stIsEmitting()) {
+          const _dispatch = () =>
+            __stEmit({
+              label: src?.label,
+              oldValue: _ov,
+              newValue: src?.v,
+              timestamp: Date.now(),
+              mutation: _mutation,
+              downstream: __stFinalizeDownstream(_downstream)
+            });
+          if (typeof queueMicrotask === 'function') queueMicrotask(_dispatch);
+          else Promise.resolve().then(_dispatch);
+        }
+        return _r;
+      };
+    }
+
+    if (p === 'get' && typeof _value === 'function') {
+      return (signal, ...args) => {
+        __stBeginReadLabel(signal?.label);
+        try {
+          return _value(signal, ...args);
+        } finally {
+          __stEndReadLabel();
+        }
+      };
+    }
+
+    if (!_flashOps.has(p) || typeof _value !== 'function') return _value;
+    return (...args) => {
+      const _r = _value(...args);
+      const _readChain = __stTakeReadChain();
+      const _chain = __stSourceChain(_readChain);
+      __stFlashDomByOperation(typeof p === 'string' ? p : String(p), args, _chain);
       return _r;
     };
   }

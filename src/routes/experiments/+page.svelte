@@ -4,6 +4,7 @@
 
 	let count = $state(0);
 	const doubled = $derived(count * 2);
+	const doubledButMore = $derived(doubled + 20);
 
 	let name = $state('world');
 	// The re-entrancy guard in __emit prevents this from causing a feedback loop:
@@ -62,11 +63,12 @@
 	<div>
 		<p>Another signal of count: {count}</p>
 		<p>Doubled count: {doubled}</p>
+		<p>Doubled count plus 20: {doubledButMore}</p>
 	</div>
 
 	<h2 class="mb-2 text-sm font-semibold text-slate-500">signal events (last 30)</h2>
 
-	<ul class="space-y-1 text-sm">
+	<!-- <ul class="space-y-1 text-sm">
 		{#each events as e, i (`${e.timestamp}:${e.label ?? 'unknown'}:${i}`)}
 			<li class="rounded bg-slate-100 px-3 py-2">
 				<span class="font-semibold text-blue-700">{e.label ?? '(unlabeled)'}</span>
@@ -111,5 +113,5 @@
 				{/if}
 			</li>
 		{/each}
-	</ul>
+	</ul> -->
 </div>
