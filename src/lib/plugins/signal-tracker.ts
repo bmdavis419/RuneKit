@@ -8,8 +8,6 @@ const RESOLVED_ID = '\0virtual:signal-tracker';
 // `update`    → post-increment/decrement (count++)
 // `update_pre`→ pre-increment/decrement (++count)
 // `mutate`    → non-proxied object mutation
-// TODO: track downstream reactions (which effects re-ran)
-// TODO: resolve source locations via source maps
 const TRACKED_FNS = `new Set(['set','update','update_pre','mutate'])`;
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -17,11 +15,79 @@ const VIRTUAL_MODULE = /* js */ `
 console.log('[signal-tracker] virtual module loaded');
 const _listeners = new Set();
 let _active = false;
+const _stackIgnore = ['virtual:signal-tracker', '__st', 'svelte/internal/client'];
+
+const _isReaction = (value) => value && typeof value === 'object' && typeof value.wv === 'number';
+const _fnName = (value) => (typeof value?.name === 'string' && value.name.length > 0 ? value.name : undefined);
+const _extractFrames = (stack) => stack?.split('\\n').slice(1).map((line) => line.trim()) ?? [];
+const _firstExternalFrame = (frames) =>
+  frames.find((line) => !_stackIgnore.some((token) => line.includes(token)));
 
 export function onSignalChange(handler) {
   console.log('[signal-tracker] onSignalChange registered');
   _listeners.add(handler);
   return () => _listeners.delete(handler);
+}
+
+export function __isEmitting() {
+  return _active;
+}
+
+export function __mutationMeta(operation) {
+  const frames = _extractFrames(new Error().stack);
+  return {
+    operation,
+    callsite: _firstExternalFrame(frames),
+    stack: frames.slice(0, 6).join('\\n') || undefined
+  };
+}
+
+export function __snapshotDownstream(source) {
+  if (!Array.isArray(source?.reactions) || source.reactions.length === 0) return [];
+
+  const queue = [...source.reactions];
+  const visited = new Set();
+  const records = [];
+
+  while (queue.length > 0) {
+    const reaction = queue.shift();
+    if (!_isReaction(reaction) || visited.has(reaction)) continue;
+    visited.add(reaction);
+
+    const isDerived = 'reactions' in reaction && 'v' in reaction;
+    records.push({
+      reaction,
+      kind: isDerived ? 'derived' : 'effect',
+      label: typeof reaction.label === 'string' ? reaction.label : undefined,
+      fnName: _fnName(reaction.fn),
+      componentName: _fnName(reaction.component_function ?? reaction.ctx?.function),
+      writeVersionBefore: reaction.wv
+    });
+
+    if (isDerived && Array.isArray(reaction.reactions)) {
+      for (const next of reaction.reactions) queue.push(next);
+    }
+  }
+
+  return records;
+}
+
+export function __finalizeDownstream(snapshot) {
+  return (Array.isArray(snapshot) ? snapshot : []).map((record) => {
+    const writeVersionAfter = _isReaction(record.reaction) ? record.reaction.wv : undefined;
+    return {
+      kind: record.kind,
+      label: record.label,
+      fnName: record.fnName,
+      componentName: record.componentName,
+      writeVersionBefore: record.writeVersionBefore,
+      writeVersionAfter,
+      updated:
+        typeof record.writeVersionBefore === 'number' &&
+        typeof writeVersionAfter === 'number' &&
+        writeVersionAfter !== record.writeVersionBefore
+    };
+  });
 }
 
 /** @internal – injected into compiled Svelte output by vite-plugin-signal-tracker */
@@ -103,7 +169,13 @@ export function signalTracker(): Plugin {
 
 			// 2. Build the proxy + tracker import injection.
 			const injection = `
-import { __emit as __stEmit } from '${VIRTUAL_ID}';
+import {
+  __emit as __stEmit,
+  __isEmitting as __stIsEmitting,
+  __mutationMeta as __stMutationMeta,
+  __snapshotDownstream as __stSnapshotDownstream,
+  __finalizeDownstream as __stFinalizeDownstream
+} from '${VIRTUAL_ID}';
 const _tracked = ${TRACKED_FNS};
 const ${alias} = new Proxy(${origAlias}, {
   get(t, p) {
@@ -111,8 +183,23 @@ const ${alias} = new Proxy(${origAlias}, {
     return (src, ...args) => {
       const _ov = src?.v;
       const _wv = src?.wv;
+      const _op = typeof p === 'string' ? p : String(p);
+      const _mutation = __stMutationMeta(_op);
+      const _downstream = __stSnapshotDownstream(src);
       const _r = t[p](src, ...args);
-      if (src?.wv !== _wv) __stEmit({ label: src?.label, oldValue: _ov, newValue: src?.v, timestamp: Date.now() });
+      if (src?.wv !== _wv && !__stIsEmitting()) {
+        const _dispatch = () =>
+          __stEmit({
+            label: src?.label,
+            oldValue: _ov,
+            newValue: src?.v,
+            timestamp: Date.now(),
+            mutation: _mutation,
+            downstream: __stFinalizeDownstream(_downstream)
+          });
+        if (typeof queueMicrotask === 'function') queueMicrotask(_dispatch);
+        else Promise.resolve().then(_dispatch);
+      }
       return _r;
     };
   }
