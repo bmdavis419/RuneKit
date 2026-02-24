@@ -63,11 +63,11 @@ const _flash = (value, sourceLabel) => {
 	for (const root of _flashExclusionRoots) {
 		if (root?.contains?.(element)) return;
 	}
-	if (
-		typeof element.closest === 'function' &&
-		element.closest('[data-signal-tracker-monitor="true"]')
-	)
-		return;
+	if (element.closest?.('[data-signal-tracker-monitor="true"]')) return;
+	// Svelte components might be detached from the root when updated or have different DOM structures
+	// so we check if any exclusion root contains this element OR if the element is part of the monitor component
+	if (element.id && typeof element.id === 'string' && element.id.startsWith('monitor-')) return;
+
 	_ensureFlashStyle();
 	element.setAttribute('data-signal-tracker-source', sourceLabel);
 	element.classList.add(_flashClass);

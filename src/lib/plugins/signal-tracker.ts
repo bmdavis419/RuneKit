@@ -45,6 +45,7 @@ export function signalTracker(): Plugin {
 			// Only handle Svelte-compiled client output.
 			// SSR output imports from svelte/internal/server — skip it.
 			if (!id.endsWith('.svelte')) return null;
+			if (id.includes('SignalTrackerMonitor.svelte')) return null;
 
 			const hasClientImport =
 				code.includes("'svelte/internal/client'") || code.includes('"svelte/internal/client"');

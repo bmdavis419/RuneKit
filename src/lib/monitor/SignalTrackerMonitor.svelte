@@ -29,6 +29,7 @@
 	let monitor_statsByLabel = $state<Record<string, SignalStatsRow>>({});
 	let monitor_rerenderFlashEnabled = $state(true);
 	let monitor_eventSeq = 0;
+	let now = $state(Date.now());
 
 	let pendingFeed: SignalFeedItem[] = [];
 	let pendingStats: Array<{
@@ -43,6 +44,17 @@
 
 	const leftClass = () => (position === 'bottom-left' ? 'left-4' : 'right-4');
 
+	const relativeTime = (timestamp: number, currentNow: number) => {
+		const diffMs = currentNow - timestamp;
+		if (diffMs < 1000) return 'just now';
+		const diffSec = Math.floor(diffMs / 1000);
+		if (diffSec < 60) return `${diffSec}s ago`;
+		const diffMin = Math.floor(diffSec / 60);
+		if (diffMin < 60) return `${diffMin}m ago`;
+		const diffHour = Math.floor(diffMin / 60);
+		return `${diffHour}h ago`;
+	};
+
 	const stringify = (value: unknown) => {
 		if (typeof value === 'string') return value;
 		try {
@@ -52,7 +64,6 @@
 		}
 	};
 
-	const shortTime = (timestamp: number) => new Date(timestamp).toISOString().slice(11, 23);
 	const nextId = (prefix: string, label: string) => {
 		monitor_eventSeq += 1;
 		return `${prefix}:${label || 'unknown'}:${Date.now()}:${monitor_eventSeq}`;
@@ -214,7 +225,12 @@
 		const offRead = onSignalRead(onRead);
 		const offWrite = onSignalWrite(onWrite);
 
+		const timeInterval = setInterval(() => {
+			now = Date.now();
+		}, 1000);
+
 		return () => {
+			clearInterval(timeInterval);
 			offFlashExclusion();
 			offChange();
 			offRead();
@@ -225,6 +241,7 @@
 </script>
 
 <div
+	id="monitor-root"
 	bind:this={monitor_rootEl}
 	data-signal-tracker-monitor="true"
 	class={`fixed bottom-4 ${leftClass()}`}
@@ -232,8 +249,9 @@
 >
 	{#if !monitor_isOpen}
 		<button
+			id="monitor-open-btn"
 			aria-label="Open signal monitor"
-			class="group h-12 w-12 overflow-hidden rounded-2xl border border-orange-300/70 bg-[#111827] p-0 shadow-[0_10px_30px_rgba(0,0,0,0.35)] transition hover:scale-[1.03] hover:border-orange-300"
+			class="group h-12 w-12 overflow-hidden rounded-2xl border border-orange-300/70 bg-white p-0 shadow-[0_10px_30px_rgba(0,0,0,0.15)] transition hover:scale-[1.03] hover:border-[#FF815A]"
 			onclick={toggleOpen}
 			type="button"
 		>
@@ -245,17 +263,20 @@
 		</button>
 	{:else}
 		<section
-			class="w-[min(94vw,40rem)] overflow-hidden rounded-2xl border border-orange-400/40 bg-[#0f172a] text-slate-100 shadow-[0_20px_50px_rgba(0,0,0,0.5)]"
+			id="monitor-panel"
+			class="w-[min(94vw,40rem)] overflow-hidden rounded-2xl border border-[#FF815A]/40 bg-white text-slate-800 shadow-[0_20px_50px_rgba(0,0,0,0.2)]"
 		>
 			<div
-				class="flex items-center justify-between border-b border-orange-400/30 bg-[#111827] px-3 py-2"
+				id="monitor-header"
+				class="flex items-center justify-between border-b border-[#FF815A]/30 bg-slate-50 px-3 py-2"
 			>
-				<div class="flex items-center gap-1">
+				<div class="flex items-center gap-1" id="monitor-tabs">
 					<button
+						id="monitor-tab-feed"
 						class={`rounded px-2 py-1 text-xs font-semibold ${
 							monitor_activeTab === 'feed'
-								? 'bg-orange-500 text-slate-950'
-								: 'text-slate-200 hover:bg-orange-400/20'
+								? 'bg-[#FF815A] text-white'
+								: 'text-slate-600 hover:bg-[#FF815A]/10'
 						}`}
 						onclick={() => (monitor_activeTab = 'feed')}
 						type="button"
@@ -263,10 +284,11 @@
 						Feed
 					</button>
 					<button
+						id="monitor-tab-variables"
 						class={`rounded px-2 py-1 text-xs font-semibold ${
 							monitor_activeTab === 'variables'
-								? 'bg-orange-500 text-slate-950'
-								: 'text-slate-200 hover:bg-orange-400/20'
+								? 'bg-[#FF815A] text-white'
+								: 'text-slate-600 hover:bg-[#FF815A]/10'
 						}`}
 						onclick={() => (monitor_activeTab = 'variables')}
 						type="button"
@@ -274,27 +296,29 @@
 						Variables
 					</button>
 				</div>
-				<div class="flex items-center gap-3">
+				<div class="flex items-center gap-3" id="monitor-controls">
 					<button
-						class="text-xs text-slate-300 hover:text-white"
+						id="monitor-close-btn"
+						class="text-xs text-slate-500 hover:text-slate-800"
 						onclick={toggleOpen}
 						type="button"
 					>
 						Close
 					</button>
 					<button
-						class="flex items-center gap-2 text-xs text-slate-200"
+						id="monitor-rerender-btn"
+						class="flex items-center gap-2 text-xs text-slate-600"
 						onclick={toggleRerenderFlash}
 						type="button"
 					>
 						<span>Re-renders</span>
 						<span
 							class={`inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-								monitor_rerenderFlashEnabled ? 'bg-orange-500' : 'bg-slate-600'
+								monitor_rerenderFlashEnabled ? 'bg-[#FF815A]' : 'bg-slate-300'
 							}`}
 						>
 							<span
-								class={`h-4 w-4 rounded-full bg-white transition-transform ${
+								class={`h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
 									monitor_rerenderFlashEnabled ? 'translate-x-4' : 'translate-x-0.5'
 								}`}
 							></span>
@@ -303,58 +327,57 @@
 				</div>
 			</div>
 
-			<div class="max-h-[55vh] overflow-auto bg-[#0b1222] p-3 font-mono text-xs">
+			<div class="h-[55vh] overflow-auto bg-slate-50 p-3 pb-6 font-mono text-xs">
 				{#if monitor_activeTab === 'feed'}
 					{#if monitor_feed.length === 0}
-						<p class="text-slate-400">No signal activity yet.</p>
+						<p class="text-slate-500">No signal activity yet.</p>
 					{:else}
 						<ul class="space-y-2">
 							{#each monitor_feed as item (item.id)}
-								<li class="rounded border border-orange-300/25 bg-slate-900/60 p-2">
+								<li class="rounded border border-[#FF815A]/25 bg-white p-2 shadow-sm">
 									<div class="flex items-center justify-between gap-2">
 										<div class="flex items-center gap-1">
 											<span
-												class="rounded bg-orange-500 px-1.5 py-0.5 text-[10px] font-semibold text-slate-950"
+												class="rounded bg-[#FF815A] px-1.5 py-0.5 text-[10px] font-semibold text-white"
 												>{item.kind}</span
 											>
-											<span class="font-semibold text-orange-100"
-												>{item.label || '(unlabeled)'}</span
+											<span class="font-semibold text-slate-800">{item.label || '(unlabeled)'}</span
 											>
 											{#if item.operation}
-												<span class="text-slate-400">({item.operation})</span>
+												<span class="text-slate-500">({item.operation})</span>
 											{/if}
 										</div>
-										<span class="text-slate-400">{shortTime(item.timestamp)}</span>
+										<span class="text-slate-400">{relativeTime(item.timestamp, now)}</span>
 									</div>
 									{#if item.kind === 'change'}
-										<div class="mt-1 text-slate-300">
+										<div class="mt-1 text-slate-600">
 											{stringify(item.oldValue)} → {stringify(item.newValue)}
 										</div>
-										<div class="mt-1 text-slate-400">
+										<div class="mt-1 text-slate-500">
 											downstream: {item.downstreamUpdated ?? 0}/{item.downstreamTotal ?? 0}
 										</div>
 									{/if}
 									{#if item.sourceChain}
-										<div class="mt-1 break-all text-slate-400">chain: {item.sourceChain}</div>
+										<div class="mt-1 break-all text-slate-500">chain: {item.sourceChain}</div>
 									{/if}
 								</li>
 							{/each}
 						</ul>
 					{/if}
 				{:else if statsRows().length === 0}
-					<p class="text-slate-400">No tracked variables yet.</p>
+					<p class="text-slate-500">No tracked variables yet.</p>
 				{:else}
 					<ul class="space-y-2">
 						{#each statsRows() as row (row.label)}
-							<li class="rounded border border-orange-300/25 bg-slate-900/60 p-2">
+							<li class="rounded border border-[#FF815A]/25 bg-white p-2 shadow-sm">
 								<div class="flex items-center justify-between gap-2">
-									<span class="font-semibold text-orange-100">{row.label}</span>
-									<span class="text-slate-400">{shortTime(row.lastSeenAt)}</span>
+									<span class="font-semibold text-slate-800">{row.label}</span>
+									<span class="text-slate-400">{relativeTime(row.lastSeenAt, now)}</span>
 								</div>
-								<div class="mt-1 text-slate-300">reads: {row.reads} · writes: {row.writes}</div>
-								<div class="mt-1 text-slate-400">last write: {row.lastWriteOp ?? '—'}</div>
+								<div class="mt-1 text-slate-600">reads: {row.reads} · writes: {row.writes}</div>
+								<div class="mt-1 text-slate-500">last write: {row.lastWriteOp ?? '—'}</div>
 								{#if row.lastChain}
-									<div class="mt-1 break-all text-slate-400">chain: {row.lastChain}</div>
+									<div class="mt-1 break-all text-slate-500">chain: {row.lastChain}</div>
 								{/if}
 							</li>
 						{/each}
