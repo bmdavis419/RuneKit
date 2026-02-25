@@ -4,9 +4,10 @@ import { defineConfig } from 'vitest/config';
 import { playwright } from '@vitest/browser-playwright';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { signalTracker } from './src/lib/plugins/signal-tracker.js';
+import { routesTracker } from './src/lib/plugins/routes-tracker.js';
 
 export default defineConfig({
-	plugins: [tailwindcss(), sveltekit(), devtoolsJson(), signalTracker()],
+	plugins: [tailwindcss(), sveltekit(), devtoolsJson(), signalTracker(), routesTracker()],
 	test: {
 		expect: { requireAssertions: true },
 		projects: [

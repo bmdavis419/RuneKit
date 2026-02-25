@@ -240,6 +240,15 @@
 	});
 </script>
 
+{#if monitor_isOpen}
+	<div
+		aria-hidden="true"
+		class="fixed inset-0"
+		style={`z-index:${zIndex - 1}`}
+		onclick={toggleOpen}
+	></div>
+{/if}
+
 <div
 	id="monitor-root"
 	bind:this={monitor_rootEl}
