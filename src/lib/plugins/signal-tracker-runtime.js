@@ -18,6 +18,7 @@ let _lastReadAt = 0;
 const _readLabelTTL = 100;
 let _readDepth = 0;
 let _readStack = [];
+const _derivedChainCache = new Map();
 
 const _isReaction = (value) => value && typeof value === 'object' && typeof value.wv === 'number';
 const _fnName = (value) =>
@@ -205,6 +206,13 @@ export function __setActiveSourceLabel(label) {
 	_activeSourceExpiresAt = Date.now() + _sourceLabelTTL;
 }
 
+const _expandChain = (chain) => {
+	if (chain.length === 0) return chain;
+	const subchain = _derivedChainCache.get(chain[0]);
+	if (!subchain || subchain.length < 2) return chain;
+	return [...subchain.slice(0, -1), ...chain];
+};
+
 export function __beginReadLabel(label) {
 	_readDepth += 1;
 	const isTopLevel = _readDepth === 1;
@@ -219,14 +227,16 @@ export function __endReadLabel() {
 	if (_readDepth === 0) return;
 	_readDepth -= 1;
 	if (_readDepth !== 0) return;
-	const chain = [];
+	const raw = [];
 	const seen = new Set();
 	for (let i = _readStack.length - 1; i >= 0; i -= 1) {
 		const label = _readStack[i];
 		if (seen.has(label)) continue;
 		seen.add(label);
-		chain.push(label);
+		raw.push(label);
 	}
+	const chain = _expandChain(raw);
+	if (chain.length > 1) _derivedChainCache.set(chain[chain.length - 1], chain);
 	_lastReadChain = chain.length > 0 ? chain : undefined;
 	_lastReadAt = Date.now();
 	_readStack = [];
@@ -253,12 +263,14 @@ const _truncateChain = (nodes, maxNodes = 4) => {
 
 export function __sourceChain(readChain) {
 	const source = _currentSourceLabel();
-	if (!source) return undefined;
 	const chain = Array.isArray(readChain)
 		? readChain.filter((label) => typeof label === 'string' && label.length > 0)
 		: [];
+
+	if (!source) return undefined;
 	if (chain.length === 0) return source;
-	if (chain[0] !== source) chain.unshift(source);
+
+	if (!chain.includes(source)) return undefined;
 	return _truncateChain(chain, 4).join(' > ');
 }
 

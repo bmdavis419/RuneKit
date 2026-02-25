@@ -45,7 +45,10 @@
 				<ul class="space-y-2">
 					{#each pages as route (route.id)}
 						<li class="rounded border border-[#FF815A]/25 bg-white p-2.5 shadow-sm">
-							<div class="mb-1.5 font-semibold text-slate-700">{route.id}</div>
+							<a
+								href={route.id}
+								class="mb-1.5 block font-semibold text-slate-700 hover:text-[#FF815A]">{route.id}</a
+							>
 							<div class="flex flex-wrap gap-1">
 								{#if route.layout?.component}
 									<span

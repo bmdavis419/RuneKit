@@ -67,6 +67,7 @@
 		<p>Another signal of count: {count}</p>
 		<p>Doubled count: {doubled}</p>
 		<p>Doubled count plus 20: {doubledButMore}</p>
+		<p>This is the name: {name}</p>
 	</div>
 
 	<h2 class="mb-2 text-sm font-semibold text-slate-500">signal events (last 30)</h2>

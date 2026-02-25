@@ -2,14 +2,8 @@ import type { Plugin } from 'vite';
 
 const VIRTUAL_ID = 'virtual:signal-tracker';
 const RESOLVED_ID = '\0virtual:signal-tracker';
-
-// Mutation functions the Svelte compiler emits at call sites.
-// `set`       → explicit assignment (count = 5)
-// `update`    → post-increment/decrement (count++)
-// `update_pre`→ pre-increment/decrement (++count)
-// `mutate`    → non-proxied object mutation
-const TRACKED_FNS = `new Set(['set','update','update_pre','mutate'])`;
-const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const SHIM_RESOLVED_ID = '\0virtual:signal-tracker-shim';
+const ORIG_ID = 'virtual:signal-tracker-orig';
 
 const RUNTIME_MODULE_URL = new URL('./signal-tracker-runtime.js', import.meta.url);
 const RUNTIME_MODULE_PATH = decodeURIComponent(RUNTIME_MODULE_URL.pathname);
@@ -19,71 +13,8 @@ const loadRuntimeModule = async () => {
 	return readFile(RUNTIME_MODULE_URL, 'utf8');
 };
 
-export function signalTracker(): Plugin {
-	console.log('[signal-tracker] plugin created');
-
-	return {
-		name: 'vite-plugin-signal-tracker',
-		enforce: 'post', // run after @sveltejs/vite-plugin-svelte
-
-		resolveId(id) {
-			if (id === VIRTUAL_ID) {
-				console.log('[signal-tracker] resolving virtual module');
-				return RESOLVED_ID;
-			}
-		},
-
-		async load(id) {
-			if (id === RESOLVED_ID) {
-				console.log('[signal-tracker] loading virtual module');
-				this.addWatchFile(RUNTIME_MODULE_PATH);
-				return loadRuntimeModule();
-			}
-		},
-
-		transform(code, id) {
-			// Only handle Svelte-compiled client output.
-			// SSR output imports from svelte/internal/server — skip it.
-			if (!id.endsWith('.svelte')) return null;
-			if (id.includes('SignalTrackerMonitor.svelte')) return null;
-
-			const hasClientImport =
-				code.includes("'svelte/internal/client'") || code.includes('"svelte/internal/client"');
-			console.log(
-				`[signal-tracker] transform: ${id.split('/').slice(-2).join('/')} | has client import: ${hasClientImport}`
-			);
-
-			if (!hasClientImport) return null;
-
-			// Log raw bytes around the import so we can see invisible characters
-			const clientIdx = code.indexOf('svelte/internal/client');
-			console.log(
-				'[signal-tracker] raw context:',
-				JSON.stringify(code.slice(Math.max(0, clientIdx - 40), clientIdx + 40))
-			);
-
-			// Capture the namespace alias (almost always `$`).
-			const importRe =
-				/^import\s+\*\s+as\s+([$_A-Za-z][$_0-9A-Za-z]*)\s+from\s+(['"])svelte\/internal\/client\2\s*;?/m;
-			const match = importRe.exec(code);
-			if (!match) {
-				console.log('[signal-tracker] warn: could not find namespace import alias, skipping');
-				return null;
-			}
-
-			const alias = match[1];
-			const origAlias = `${alias}__orig`;
-
-			console.log(`[signal-tracker] injecting proxy into ${id.split('/').pop()} (alias: ${alias})`);
-
-			// 1. Rename the original import alias.
-			let result = code.replace(
-				importRe,
-				`import * as ${origAlias} from 'svelte/internal/client';`
-			);
-
-			// 2. Build the proxy + tracker import injection.
-			const injection = `
+const SHIM_CODE = `
+import * as __orig from '${ORIG_ID}';
 import {
   __emit as __stEmit,
   __isEmitting as __stIsEmitting,
@@ -99,118 +30,113 @@ import {
   __takeReadChain as __stTakeReadChain,
   __sourceChain as __stSourceChain
 } from '${VIRTUAL_ID}';
-const _tracked = ${TRACKED_FNS};
+
 const _isInternalLabel = (label) =>
   typeof label === 'string' && (label.startsWith('monitor_') || label.startsWith('__st'));
-const _flashOps = new Set([
-  'set_text',
-  'set_value',
-  'set_checked',
-  'set_selected',
-  'set_attribute',
-  'set_xlink_attribute',
-  'set_class',
-  'set_style'
-]);
-const ${alias} = new Proxy(${origAlias}, {
-  get(t, p) {
-    const _value = t[p];
-    if (_tracked.has(p)) {
-      return (src, ...args) => {
-        if (_isInternalLabel(src?.label)) return _value(src, ...args);
-        __stSetActiveSourceLabel(src?.label);
-        const _ov = src?.v;
-        const _wv = src?.wv;
-        const _op = typeof p === 'string' ? p : String(p);
-        const _mutation = __stMutationMeta(_op);
-        const _downstream = __stSnapshotDownstream(src);
-        const _r = _value(src, ...args);
-        if (src?.wv !== _wv && !__stIsEmitting()) {
-          const _sourceChain = __stSourceChain();
-          const _dispatch = () =>
-            __stEmit({
-              label: src?.label,
-              oldValue: _ov,
-              newValue: src?.v,
-              timestamp: Date.now(),
-              mutation: _mutation,
-              downstream: __stFinalizeDownstream(_downstream)
-            });
-          __stEmitWrite({
-            label: src?.label,
-            operation: _op,
-            timestamp: Date.now(),
-            sourceChain: _sourceChain
-          });
-          if (typeof queueMicrotask === 'function') queueMicrotask(_dispatch);
-          else Promise.resolve().then(_dispatch);
-        }
-        return _r;
-      };
-    }
 
-    if (p === 'get' && typeof _value === 'function') {
-      return (signal, ...args) => {
-        if (_isInternalLabel(signal?.label)) return _value(signal, ...args);
-        const _isTopLevelRead = __stBeginReadLabel(signal?.label);
-        try {
-          return _value(signal, ...args);
-        } finally {
-          __stEndReadLabel();
-          if (_isTopLevelRead) {
-            __stEmitRead({
-              label: signal?.label,
-              timestamp: Date.now(),
-              sourceChain: __stSourceChain([signal?.label])
-            });
-          }
-        }
-      };
-    }
-
-    if (!_flashOps.has(p) || typeof _value !== 'function') return _value;
-    return (...args) => {
-      const _r = _value(...args);
-      const _readChain = __stTakeReadChain();
-      const _chain = __stSourceChain(_readChain);
-      __stFlashDomByOperation(typeof p === 'string' ? p : String(p), args, _chain);
-      return _r;
-    };
+const _wrapMutation = (fn, op) => (src, ...args) => {
+  if (_isInternalLabel(src?.label)) return fn(src, ...args);
+  __stSetActiveSourceLabel(src?.label);
+  const _ov = src?.v;
+  const _wv = src?.wv;
+  const _mutation = __stMutationMeta(op);
+  const _downstream = __stSnapshotDownstream(src);
+  const _r = fn(src, ...args);
+  if (src?.wv !== _wv && !__stIsEmitting()) {
+    const _sourceChain = __stSourceChain();
+    const _dispatch = () =>
+      __stEmit({
+        label: src?.label,
+        oldValue: _ov,
+        newValue: src?.v,
+        timestamp: Date.now(),
+        mutation: _mutation,
+        downstream: __stFinalizeDownstream(_downstream)
+      });
+    __stEmitWrite({
+      label: src?.label,
+      operation: op,
+      timestamp: Date.now(),
+      sourceChain: _sourceChain
+    });
+    if (typeof queueMicrotask === 'function') queueMicrotask(_dispatch);
+    else Promise.resolve().then(_dispatch);
   }
-});`;
+  return _r;
+};
 
-			// 3. Insert before the first alias usage so we don't hit TDZ when
-			//    compiled output references `$.FILENAME` before imports.
-			const aliasUseRe = new RegExp(`${escapeRegExp(alias)}\\s*\\.`, 'm');
-			const aliasUseMatch = aliasUseRe.exec(result);
-			if (aliasUseMatch) {
-				const lineStart = result.lastIndexOf('\n', aliasUseMatch.index) + 1;
-				console.log('[signal-tracker] placement: inserted before first alias usage');
-				result = result.slice(0, lineStart) + injection + '\n' + result.slice(lineStart);
-				return { code: result, map: null };
+const _wrapDomOp = (fn, op) => (...args) => {
+  const _r = fn(...args);
+  const _readChain = __stTakeReadChain();
+  const _chain = __stSourceChain(_readChain);
+  __stFlashDomByOperation(op, args, _chain);
+  return _r;
+};
+
+export * from '${ORIG_ID}';
+
+export const set = _wrapMutation(__orig.set, 'set');
+export const update = _wrapMutation(__orig.update, 'update');
+export const update_pre = _wrapMutation(__orig.update_pre, 'update_pre');
+export const mutate = _wrapMutation(__orig.mutate, 'mutate');
+
+export const get = (signal, ...args) => {
+  if (_isInternalLabel(signal?.label)) return __orig.get(signal, ...args);
+  const _isTopLevelRead = __stBeginReadLabel(signal?.label);
+  try {
+    return __orig.get(signal, ...args);
+  } finally {
+    __stEndReadLabel();
+    if (_isTopLevelRead) {
+      __stEmitRead({
+        label: signal?.label,
+        timestamp: Date.now(),
+        sourceChain: __stSourceChain([signal?.label])
+      });
+    }
+  }
+};
+
+export const set_text = _wrapDomOp(__orig.set_text, 'set_text');
+export const set_value = _wrapDomOp(__orig.set_value, 'set_value');
+export const set_checked = _wrapDomOp(__orig.set_checked, 'set_checked');
+export const set_selected = _wrapDomOp(__orig.set_selected, 'set_selected');
+export const set_attribute = _wrapDomOp(__orig.set_attribute, 'set_attribute');
+export const set_xlink_attribute = _wrapDomOp(__orig.set_xlink_attribute, 'set_xlink_attribute');
+export const set_class = _wrapDomOp(__orig.set_class, 'set_class');
+export const set_style = _wrapDomOp(__orig.set_style, 'set_style');
+`;
+
+export function signalTracker(): Plugin {
+	return {
+		name: 'vite-plugin-signal-tracker',
+		enforce: 'pre',
+
+		async resolveId(id, importer, options) {
+			if (id === VIRTUAL_ID) return RESOLVED_ID;
+
+			if (id === 'svelte/internal/client' && !options?.ssr) {
+				if (!importer?.endsWith('.svelte')) return null;
+				if (importer.includes('SignalTrackerMonitor.svelte')) return null;
+				return SHIM_RESOLVED_ID;
 			}
 
-			const renamedImportRe = new RegExp(
-				`^import\\s+\\*\\s+as\\s+${escapeRegExp(origAlias)}\\s+from\\s+['"]svelte\\/internal\\/client['"]\\s*;?`,
-				'm'
-			);
-			const renamedImportMatch = renamedImportRe.exec(result);
-			if (!renamedImportMatch) {
-				console.log('[signal-tracker] warn: could not find renamed client import, skipping');
-				return null;
+			if (id === ORIG_ID) {
+				const resolved = await this.resolve('svelte/internal/client', undefined, {
+					skipSelf: true
+				});
+				return resolved?.id ?? null;
 			}
-			const importLineEnd = renamedImportMatch.index + renamedImportMatch[0].length;
-			const fallbackIndex = result.indexOf('\n', importLineEnd);
-			console.log(
-				'[signal-tracker] placement: first alias usage not found, using post-import fallback'
-			);
-			result =
-				result.slice(0, fallbackIndex === -1 ? result.length : fallbackIndex + 1) +
-				injection +
-				'\n' +
-				result.slice(fallbackIndex === -1 ? result.length : fallbackIndex + 1);
+		},
 
-			return { code: result, map: null };
+		async load(id) {
+			if (id === RESOLVED_ID) {
+				this.addWatchFile(RUNTIME_MODULE_PATH);
+				return loadRuntimeModule();
+			}
+			if (id === SHIM_RESOLVED_ID) {
+				return SHIM_CODE;
+			}
 		}
 	};
 }
