@@ -24,7 +24,7 @@
 	}: SignalTrackerMonitorProps = $props();
 
 	let monitor_isOpen = $state(false);
-	let monitor_activeTab = $state<'feed' | 'variables'>('feed');
+	let monitor_activeTab = $state<'feed' | 'variables' | 'timeline'>('feed');
 	let monitor_feed = $state<SignalFeedItem[]>([]);
 	let monitor_statsByLabel = $state<Record<string, SignalStatsRow>>({});
 	let monitor_rerenderFlashEnabled = $state(true);
@@ -204,6 +204,119 @@
 			(a, b) => b.reads + b.writes - (a.reads + a.writes) || b.lastSeenAt - a.lastSeenAt
 		);
 
+	const formatRelMs = (ms: number) =>
+		ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
+
+	const kindOrder = { read: 0, write: 1, change: 2 } as const;
+
+	const TRACK_PX = 340;
+	const MAX_GAP_MS = 800;
+
+	const niceTickIntervalMs = (span: number) => {
+		if (span < 500) return 100;
+		if (span < 2000) return 500;
+		if (span < 10000) return 1000;
+		if (span < 30000) return 5000;
+		if (span < 120000) return 15000;
+		return 30000;
+	};
+
+	const timelineData = () => {
+		const items = [...monitor_feed].sort((a, b) => a.timestamp - b.timestamp);
+		if (items.length === 0) return null;
+
+		const byLabel: Record<string, SignalFeedItem[]> = {};
+		for (const item of items) (byLabel[item.label] ??= []).push(item);
+		for (const label of Object.keys(byLabel))
+			byLabel[label].sort(
+				(a, b) => a.timestamp - b.timestamp || kindOrder[a.kind] - kindOrder[b.kind]
+			);
+
+		const minTs = items[0].timestamp;
+		const maxTs = items[items.length - 1].timestamp;
+		const span = Math.max(maxTs - minTs, 1);
+
+		// Build compressed scale: cap large inter-event gaps to MAX_GAP_MS
+		const eventTs = [...new Set(items.map((i) => i.timestamp))].sort((a, b) => a - b);
+		const compressedTs: number[] = [0];
+		for (let i = 1; i < eventTs.length; i++)
+			compressedTs.push(compressedTs[i - 1] + Math.min(eventTs[i] - eventTs[i - 1], MAX_GAP_MS));
+		const totalCompressed = compressedTs[compressedTs.length - 1] || 1;
+
+		const toX = (ts: number): number => {
+			if (ts <= eventTs[0]) return 0;
+			if (ts >= eventTs[eventTs.length - 1]) return TRACK_PX;
+			let lo = 0;
+			for (let i = 1; i < eventTs.length; i++) {
+				if (eventTs[i] >= ts) {
+					lo = i - 1;
+					break;
+				}
+			}
+			const frac = (ts - eventTs[lo]) / (eventTs[lo + 1] - eventTs[lo]);
+			return (
+				((compressedTs[lo] + frac * (compressedTs[lo + 1] - compressedTs[lo])) / totalCompressed) *
+				TRACK_PX
+			);
+		};
+
+		const labels = Object.keys(byLabel).sort((a, b) => {
+			const aMax = byLabel[a][byLabel[a].length - 1].timestamp;
+			const bMax = byLabel[b][byLabel[b].length - 1].timestamp;
+			return bMax - aMax;
+		});
+
+		const intervalMs = niceTickIntervalMs(span);
+		const ticks: { ms: number; x: number }[] = [{ ms: 0, x: 0 }];
+		for (let ms = intervalMs; ms < span; ms += intervalMs) ticks.push({ ms, x: toX(minTs + ms) });
+		ticks.push({ ms: span, x: TRACK_PX });
+
+		const lastKnown: Record<string, unknown> = {};
+		const stateByItemId: Record<string, unknown> = {};
+		for (const item of items) {
+			stateByItemId[item.id] = lastKnown[item.label];
+			if (item.kind === 'change') lastKnown[item.label] = item.newValue;
+		}
+
+		return { labels, byLabel, minTs, maxTs, span, toX, ticks, stateByItemId };
+	};
+
+	let monitor_tooltip = $state<{
+		item: SignalFeedItem;
+		valueAtTime: unknown;
+		minTs: number;
+		x: number;
+		y: number;
+		flipDown: boolean;
+	} | null>(null);
+
+	const TOOLTIP_W = 224;
+	const TOOLTIP_H = 110;
+
+	const showTooltip = (
+		e: MouseEvent,
+		item: SignalFeedItem,
+		valueAtTime: unknown,
+		minTs: number
+	) => {
+		const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+		const dotCx = rect.left + rect.width / 2;
+		const x = Math.max(8, Math.min(window.innerWidth - TOOLTIP_W - 8, dotCx - TOOLTIP_W / 2));
+		const flipDown = rect.top - TOOLTIP_H - 8 < 0;
+		monitor_tooltip = {
+			item,
+			valueAtTime,
+			minTs,
+			x,
+			y: flipDown ? rect.bottom : rect.top,
+			flipDown
+		};
+	};
+
+	const hideTooltip = () => {
+		monitor_tooltip = null;
+	};
+
 	const toggleOpen = () => {
 		monitor_isOpen = !monitor_isOpen;
 	};
@@ -239,15 +352,6 @@
 		};
 	});
 </script>
-
-{#if monitor_isOpen}
-	<div
-		aria-hidden="true"
-		class="fixed inset-0"
-		style={`z-index:${zIndex - 1}`}
-		onclick={toggleOpen}
-	></div>
-{/if}
 
 <div
 	id="monitor-root"
@@ -303,6 +407,18 @@
 						type="button"
 					>
 						Variables
+					</button>
+					<button
+						id="monitor-tab-timeline"
+						class={`rounded px-2 py-1 text-xs font-semibold ${
+							monitor_activeTab === 'timeline'
+								? 'bg-[#FF815A] text-white'
+								: 'text-slate-600 hover:bg-[#FF815A]/10'
+						}`}
+						onclick={() => (monitor_activeTab = 'timeline')}
+						type="button"
+					>
+						Timeline
 					</button>
 				</div>
 				<div class="flex items-center gap-3" id="monitor-controls">
@@ -373,26 +489,141 @@
 							{/each}
 						</ul>
 					{/if}
-				{:else if statsRows().length === 0}
-					<p class="text-slate-500">No tracked variables yet.</p>
+				{:else if monitor_activeTab === 'variables'}
+					{#if statsRows().length === 0}
+						<p class="text-slate-500">No tracked variables yet.</p>
+					{:else}
+						<ul class="space-y-2">
+							{#each statsRows() as row (row.label)}
+								<li class="rounded border border-[#FF815A]/25 bg-white p-2 shadow-sm">
+									<div class="flex items-center justify-between gap-2">
+										<span class="font-semibold text-slate-800">{row.label}</span>
+										<span class="text-slate-400">{relativeTime(row.lastSeenAt, now)}</span>
+									</div>
+									<div class="mt-1 text-slate-600">reads: {row.reads} · writes: {row.writes}</div>
+									<div class="mt-1 text-slate-500">last write: {row.lastWriteOp ?? '—'}</div>
+									{#if row.lastChain}
+										<div class="mt-1 break-all text-slate-500">chain: {row.lastChain}</div>
+									{/if}
+								</li>
+							{/each}
+						</ul>
+					{/if}
 				{:else}
-					<ul class="space-y-2">
-						{#each statsRows() as row (row.label)}
-							<li class="rounded border border-[#FF815A]/25 bg-white p-2 shadow-sm">
-								<div class="flex items-center justify-between gap-2">
-									<span class="font-semibold text-slate-800">{row.label}</span>
-									<span class="text-slate-400">{relativeTime(row.lastSeenAt, now)}</span>
+					{@const tl = timelineData()}
+					{#if tl === null}
+						<p class="text-slate-500">No signal activity yet.</p>
+					{:else}
+						<div>
+							<div class="flex gap-2">
+								<div class="w-36 shrink-0">
+									<div class="mb-1.5 h-5"></div>
+									<div class="space-y-1">
+										{#each tl.labels as label}
+											<div
+												class="flex h-5 items-center justify-end truncate text-right text-[10px] font-medium text-slate-700"
+												title={label}
+											>
+												{label}
+											</div>
+										{/each}
+									</div>
 								</div>
-								<div class="mt-1 text-slate-600">reads: {row.reads} · writes: {row.writes}</div>
-								<div class="mt-1 text-slate-500">last write: {row.lastWriteOp ?? '—'}</div>
-								{#if row.lastChain}
-									<div class="mt-1 break-all text-slate-500">chain: {row.lastChain}</div>
-								{/if}
-							</li>
-						{/each}
-					</ul>
+								<div class="min-w-0 flex-1 overflow-x-auto">
+									<div style="width: {TRACK_PX}px">
+										<div class="relative mb-1.5 h-5 border-b border-slate-200">
+											{#each tl.ticks as tick}
+												<div
+													class="absolute flex -translate-x-1/2 flex-col items-center"
+													style="left: {tick.x}px"
+												>
+													<div class="h-1.5 w-px bg-slate-300"></div>
+													<span class="text-[9px] text-slate-400">{formatRelMs(tick.ms)}</span>
+												</div>
+											{/each}
+										</div>
+										<div class="space-y-1">
+											{#each tl.labels as label}
+												<div class="relative h-5 rounded bg-slate-100">
+													{#each tl.byLabel[label] as item}
+														<div
+															role="img"
+															aria-label="{item.kind} {item.label}"
+															class="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 cursor-default rounded-full border border-white shadow-sm"
+															style="left: {tl.toX(
+																item.timestamp
+															)}px; background-color: {item.kind === 'read'
+																? '#93c5fd'
+																: item.kind === 'write'
+																	? '#FF815A'
+																	: '#4ade80'}"
+															onmousemove={(e) =>
+																showTooltip(e, item, tl.stateByItemId[item.id], tl.minTs)}
+															onmouseleave={hideTooltip}
+														></div>
+													{/each}
+												</div>
+											{/each}
+										</div>
+									</div>
+								</div>
+							</div>
+							<div class="mt-4 flex items-center gap-4 text-[9px] text-slate-500">
+								<span class="flex items-center gap-1">
+									<span
+										class="inline-block h-2.5 w-2.5 rounded-full border border-white bg-[#4ade80] shadow-sm"
+									></span>change
+								</span>
+								<span class="flex items-center gap-1">
+									<span
+										class="inline-block h-2.5 w-2.5 rounded-full border border-white bg-[#FF815A] shadow-sm"
+									></span>write
+								</span>
+								<span class="flex items-center gap-1">
+									<span
+										class="inline-block h-2.5 w-2.5 rounded-full border border-white bg-[#93c5fd] shadow-sm"
+									></span>read
+								</span>
+							</div>
+						</div>
+					{/if}
 				{/if}
 			</div>
 		</section>
 	{/if}
 </div>
+
+{#if monitor_tooltip !== null}
+	{@const t = monitor_tooltip}
+	<div
+		class="pointer-events-none fixed w-[{TOOLTIP_W}px] rounded-xl border border-[#FF815A]/30 bg-white p-2.5 font-mono text-[10px] text-slate-800 shadow-[0_8px_24px_rgba(0,0,0,0.12)]"
+		style="left: {t.x}px; top: {t.flipDown ? t.y + 16 : t.y - 8}px; transform: {t.flipDown
+			? 'none'
+			: 'translateY(-100%)'}; z-index: {zIndex + 1}"
+	>
+		<div class="font-semibold text-slate-800">{t.item.label}</div>
+		<div class="mt-0.5 text-slate-400">
+			{t.item.kind}{t.item.operation ? ` · ${t.item.operation}` : ''}
+		</div>
+		{#if t.item.kind === 'change'}
+			<div class="mt-1.5 space-y-0.5 border-t border-[#FF815A]/15 pt-1.5">
+				<div class="flex gap-1.5">
+					<span class="shrink-0 text-slate-400">before</span>
+					<span class="truncate text-[#FF815A]">{stringify(t.item.oldValue)}</span>
+				</div>
+				<div class="flex gap-1.5">
+					<span class="shrink-0 text-slate-400">after &nbsp;</span>
+					<span class="truncate text-green-600">{stringify(t.item.newValue)}</span>
+				</div>
+			</div>
+		{:else if t.valueAtTime !== undefined}
+			<div class="mt-1.5 flex gap-1.5 border-t border-[#FF815A]/15 pt-1.5">
+				<span class="shrink-0 text-slate-400">value</span>
+				<span class="truncate text-sky-600">{stringify(t.valueAtTime)}</span>
+			</div>
+		{:else}
+			<div class="mt-1 text-slate-400">no value recorded</div>
+		{/if}
+		<div class="mt-1.5 text-slate-400">+{formatRelMs(t.item.timestamp - t.minTs)}</div>
+	</div>
+{/if}
