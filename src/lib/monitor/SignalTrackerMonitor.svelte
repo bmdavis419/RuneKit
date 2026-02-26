@@ -260,11 +260,7 @@
 			);
 		};
 
-		const labels = Object.keys(byLabel).sort((a, b) => {
-			const aMax = byLabel[a][byLabel[a].length - 1].timestamp;
-			const bMax = byLabel[b][byLabel[b].length - 1].timestamp;
-			return bMax - aMax;
-		});
+		const labels = Object.keys(byLabel).sort((a, b) => a.localeCompare(b));
 
 		const intervalMs = niceTickIntervalMs(span);
 		const ticks: { ms: number; x: number }[] = [{ ms: 0, x: 0 }];
@@ -324,6 +320,13 @@
 	const toggleRerenderFlash = () => {
 		monitor_rerenderFlashEnabled = !monitor_rerenderFlashEnabled;
 		setRerenderFlashEnabled(monitor_rerenderFlashEnabled);
+	};
+
+	const resetData = () => {
+		monitor_feed = [];
+		monitor_statsByLabel = {};
+		pendingFeed = [];
+		pendingStats = [];
 	};
 
 	onMount(() => {
@@ -511,17 +514,26 @@
 					{/if}
 				{:else}
 					{@const tl = timelineData()}
+					<div class="mb-2 flex justify-end">
+						<button
+							class="text-[10px] text-slate-400 hover:text-slate-700"
+							onclick={resetData}
+							type="button"
+						>
+							Reset
+						</button>
+					</div>
 					{#if tl === null}
 						<p class="text-slate-500">No signal activity yet.</p>
 					{:else}
 						<div>
-							<div class="flex gap-2">
-								<div class="w-36 shrink-0">
+							<div class="flex">
+								<div class="shrink-0">
 									<div class="mb-1.5 h-5"></div>
 									<div class="space-y-1">
 										{#each tl.labels as label}
 											<div
-												class="flex h-5 items-center justify-end truncate text-right text-[10px] font-medium text-slate-700"
+												class="flex h-5 max-w-[9rem] items-center truncate pr-2 text-[10px] font-medium text-slate-700"
 												title={label}
 											>
 												{label}
@@ -529,7 +541,7 @@
 										{/each}
 									</div>
 								</div>
-								<div class="min-w-0 flex-1 overflow-x-auto">
+								<div class="min-w-0 flex-1 overflow-x-auto px-4">
 									<div style="width: {TRACK_PX}px">
 										<div class="relative mb-1.5 h-5 border-b border-slate-200">
 											{#each tl.ticks as tick}
