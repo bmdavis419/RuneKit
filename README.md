@@ -1,10 +1,41 @@
 # RuneKit
 
-The missing pieces of the SvelteKit developer experience.
+Developer tooling plugin suite for SvelteKit.
 
-### stuff I want to build in this
+## Install
 
-- Signal tracing in UI (similar to react scan)
-- Page stats viewer: is it pre-rendering? is it static? ssr? csr? etc.
-- Endpoint list viewer: all the endpoints, pages, and remote functions in the app
-- Signal breakdown viewer: see all the signals mounted on a page at a glance, and when they're fired + their history
+```bash
+bun add -d @davis7dotsh/runekit
+```
+
+## Vite config
+
+```ts
+// vite.config.ts
+import { defineConfig } from 'vite';
+import { sveltekit } from '@sveltejs/kit/vite';
+import { routesTracker, signalTracker } from '@davis7dotsh/runekit';
+
+export default defineConfig({
+	plugins: [sveltekit(), signalTracker(), routesTracker()]
+});
+```
+
+## Optional monitor UI
+
+```svelte
+<script lang="ts">
+	import { SignalTrackerMonitor } from '@davis7dotsh/runekit/monitor';
+</script>
+
+<SignalTrackerMonitor />
+```
+
+## Publish checklist
+
+```bash
+bun run format
+bun run check
+bun run prepack
+bun publish --tag alpha
+```

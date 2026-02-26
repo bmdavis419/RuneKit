@@ -1,4 +1,5 @@
 import type { Plugin } from 'vite';
+import { fileURLToPath } from 'node:url';
 
 const VIRTUAL_ID = 'virtual:signal-tracker';
 const RESOLVED_ID = '\0virtual:signal-tracker';
@@ -6,7 +7,7 @@ const SHIM_RESOLVED_ID = '\0virtual:signal-tracker-shim';
 const ORIG_ID = 'virtual:signal-tracker-orig';
 
 const RUNTIME_MODULE_URL = new URL('./signal-tracker-runtime.js', import.meta.url);
-const RUNTIME_MODULE_PATH = decodeURIComponent(RUNTIME_MODULE_URL.pathname);
+const RUNTIME_MODULE_PATH = fileURLToPath(RUNTIME_MODULE_URL);
 
 const loadRuntimeModule = async () => {
 	const { readFile } = await import('node:fs/promises');
