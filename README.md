@@ -25,10 +25,11 @@ export default defineConfig({
 
 ```svelte
 <script lang="ts">
-	import { SignalTrackerMonitor } from '@davis7dotsh/runekit/monitor';
+	import { RuneKitDashboard, SignalTrackerMonitor } from '@davis7dotsh/runekit/monitor';
 </script>
 
 <SignalTrackerMonitor />
+<RuneKitDashboard />
 ```
 
 ## Publish checklist

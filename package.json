@@ -84,5 +84,8 @@
 	},
 	"keywords": [
 		"svelte"
-	]
+	],
+	"dependencies": {
+		"es-module-lexer": "^2.0.0"
+	}
 }

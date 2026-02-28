@@ -34,9 +34,11 @@ declare module 'virtual:runekit/routes' {
 
 	export interface RemoteInfo {
 		file: string;
+		/** Browser-visible module path for dev imports. */
+		modulePath: string;
 		/** Filename stem before .remote.ts, e.g. "db" for db.remote.ts */
 		name: string;
-		/** Exported function names found in the file. */
+		/** Exported runtime symbol names found in the module. */
 		exports: string[];
 	}
 
@@ -59,15 +61,52 @@ declare module 'virtual:runekit/routes' {
 		remotes: RemoteInfo[];
 	}
 
-	/** All discovered routes, sorted by directory walk order. */
+	export interface EndpointInvocationInput {
+		path: string;
+		method?: string;
+		query?: Record<string, string | number | boolean | null | undefined>;
+		headers?: Record<string, string>;
+		body?: unknown;
+	}
+
+	export interface EndpointInvocationResult {
+		ok: boolean;
+		status: number;
+		statusText: string;
+		durationMs: number;
+		headers: Record<string, string>;
+		body: unknown;
+	}
+
+	export interface RemoteInvocationResult {
+		ok: boolean;
+		durationMs: number;
+		result?: unknown;
+		error?: { message: string; stack?: string };
+	}
+
+	/** All discovered routes, sorted by route id. */
 	export let routes: RouteNode[];
 
 	/** All *.remote.ts/js files discovered under src/. */
 	export let remotes: RemoteInfo[];
+
+	/** Path used by the development middleware for remote invocation. */
+	export const remoteInvokePath: string;
 
 	/** Subscribe to route list changes during HMR. Returns an unsubscribe function. */
 	export function onRoutesUpdated(fn: (routes: RouteNode[]) => void): () => void;
 
 	/** Subscribe to remote list changes during HMR. Returns an unsubscribe function. */
 	export function onRemotesUpdated(fn: (remotes: RemoteInfo[]) => void): () => void;
+
+	/** Execute a route endpoint from the browser with structured timing/output details. */
+	export function invokeEndpoint(input: EndpointInvocationInput): Promise<EndpointInvocationResult>;
+
+	/** Execute a remote function through RuneKit's development middleware. */
+	export function invokeRemote(
+		file: string,
+		exportName: string,
+		args?: unknown[]
+	): Promise<RemoteInvocationResult>;
 }

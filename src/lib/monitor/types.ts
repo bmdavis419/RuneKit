@@ -32,3 +32,21 @@ export interface SignalTrackerMonitorProps {
 	zIndex?: number;
 	initialRerenderFlashEnabled?: boolean;
 }
+
+export interface DashboardHistoryItem {
+	id: string;
+	kind: 'endpoint' | 'remote';
+	timestamp: number;
+	target: string;
+	input: unknown;
+	output?: unknown;
+	error?: string;
+	status?: number;
+	durationMs: number;
+}
+
+export interface RuneKitDashboardProps {
+	title?: string;
+	maxHistory?: number;
+	initialTab?: 'routes' | 'endpoints' | 'remotes' | 'history';
+}

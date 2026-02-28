@@ -2,4 +2,4 @@
 	import { RuneKitDashboard } from '../../lib/monitor.js';
 </script>
 
-<RuneKitDashboard title="RuneKit Tracker" initialTab="routes" />
+<RuneKitDashboard title="RuneKit Dashboard" initialTab="routes" />

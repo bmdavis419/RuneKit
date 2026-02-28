@@ -9,6 +9,27 @@ const ORIG_ID = 'virtual:signal-tracker-orig';
 const RUNTIME_MODULE_URL = new URL('./signal-tracker-runtime.js', import.meta.url);
 const RUNTIME_MODULE_PATH = fileURLToPath(RUNTIME_MODULE_URL);
 
+const normalizeImporter = (importer: string | undefined) => {
+	if (typeof importer !== 'string' || importer.length === 0) return '';
+	return importer.split('?')[0].split('#')[0].replace(/\\/g, '/');
+};
+
+const isSvelteImporter = (importer: string | undefined) =>
+	normalizeImporter(importer).endsWith('.svelte');
+
+const isMonitorImporter = (importer: string | undefined) => {
+	const normalized = normalizeImporter(importer);
+	if (normalized.length === 0) return false;
+	if (normalized.includes('/lib/monitor/')) return true;
+	return (
+		normalized.endsWith('/SignalTrackerMonitor.svelte') ||
+		normalized.endsWith('/RuneKitDashboard.svelte')
+	);
+};
+
+const shouldInstrumentImporter = (importer: string | undefined) =>
+	isSvelteImporter(importer) && !isMonitorImporter(importer);
+
 const loadRuntimeModule = async () => {
 	const { readFile } = await import('node:fs/promises');
 	return readFile(RUNTIME_MODULE_URL, 'utf8');
@@ -117,8 +138,7 @@ export function signalTracker(): Plugin {
 			if (id === VIRTUAL_ID) return RESOLVED_ID;
 
 			if (id === 'svelte/internal/client' && !options?.ssr) {
-				if (!importer?.endsWith('.svelte')) return null;
-				if (importer.includes('SignalTrackerMonitor.svelte')) return null;
+				if (!shouldInstrumentImporter(importer)) return null;
 				return SHIM_RESOLVED_ID;
 			}
 
@@ -135,9 +155,14 @@ export function signalTracker(): Plugin {
 				this.addWatchFile(RUNTIME_MODULE_PATH);
 				return loadRuntimeModule();
 			}
-			if (id === SHIM_RESOLVED_ID) {
-				return SHIM_CODE;
-			}
+			if (id === SHIM_RESOLVED_ID) return SHIM_CODE;
 		}
 	};
 }
+
+export const __signalTrackerInternals = {
+	normalizeImporter,
+	isSvelteImporter,
+	isMonitorImporter,
+	shouldInstrumentImporter
+};

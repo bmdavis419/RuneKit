@@ -58,7 +58,7 @@
 				<span class="text-[10px] tracking-widest text-slate-400 uppercase">devtools</span>
 				<h1 class="mt-0.5 text-sm font-semibold text-slate-700">RuneKit</h1>
 			</div>
-			<a href="/tracker" class="text-slate-400 hover:text-[#FF815A]">dashboard →</a>
+			<a href="/dashboard" class="text-slate-400 hover:text-[#FF815A]">dashboard →</a>
 		</div>
 
 		<ul class="space-y-1">

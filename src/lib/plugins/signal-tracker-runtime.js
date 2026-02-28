@@ -1,6 +1,4 @@
 // @ts-nocheck
-
-console.log('[signal-tracker] virtual module loaded');
 const _listeners = new Set();
 const _readListeners = new Set();
 const _writeListeners = new Set();
@@ -89,7 +87,6 @@ const _safeEmit = (listeners, event) => {
 };
 
 export function onSignalChange(handler) {
-	console.log('[signal-tracker] onSignalChange registered');
 	_listeners.add(handler);
 	return () => _listeners.delete(handler);
 }
