@@ -27,3 +27,11 @@
 - Do not modify files under `references/`.
 - Treat `references/` as supplemental context, not source of truth for this repo.
 - Inside `references/`, use `svelte/` and `kit/` for framework reference material.
+
+## Cursor Cloud specific instructions
+
+- **Dev server**: `bun run dev` starts Vite on port 5173. No external services or environment variables are required.
+- **Tests**: `bun run test` runs both server-side (Vitest/Node) and browser (Vitest/Playwright+Chromium) tests. Playwright browsers must be installed first via `bunx playwright install chromium --with-deps`.
+- **Lint**: `bun run lint` has pre-existing lint errors in the codebase (19 errors as of initial setup). These are not caused by agent changes.
+- **Type check**: `bun run check` runs `svelte-kit sync` then `svelte-check`. Passes with 1 pre-existing warning.
+- **No external dependencies**: No databases, Docker, API keys, or `.env` files needed. The demo pages use an in-memory todo store.
