@@ -4,11 +4,8 @@
 
 declare module 'virtual:signal-tracker' {
 	export interface SignalMutationSource {
-		/** Runtime mutation primitive invoked by compiled Svelte output. */
 		operation: 'set' | 'update' | 'update_pre' | 'mutate';
-		/** First non-tracker stack frame, usually including file:line:column. */
 		callsite: string | undefined;
-		/** Short stack preview to help trace the write origin. */
 		stack: string | undefined;
 	}
 
@@ -23,13 +20,11 @@ declare module 'virtual:signal-tracker' {
 	}
 
 	export interface SignalChangeEvent {
-		/** The signal's label (variable name as tagged by Svelte in dev mode). */
 		label: string | undefined;
 		oldValue: unknown;
 		newValue: unknown;
 		timestamp: number;
 		mutation: SignalMutationSource;
-		/** Transitive downstream reactions observed from this source at mutation time. */
 		downstream: SignalReactionUpdate[];
 	}
 
@@ -46,12 +41,31 @@ declare module 'virtual:signal-tracker' {
 		sourceChain: string | undefined;
 	}
 
+	export interface RedundantWriteEvent {
+		label: string;
+		count: number;
+		lastTimestamp: number;
+		operation: string;
+	}
+
+	export interface EffectTimingRun {
+		duration: number;
+		timestamp: number;
+	}
+
+	export interface EffectTimingEntry {
+		id: string;
+		label: string | undefined;
+		kind: 'effect' | 'pre_effect';
+		runs: EffectTimingRun[];
+		totalRuns: number;
+		totalDuration: number;
+		maxDuration: number;
+		lastTimestamp: number;
+	}
+
 	export type Unsubscribe = () => void;
 
-	/**
-	 * Subscribe to every signal change on the page.
-	 * Returns an unsubscribe function — pass it as the return value of onMount.
-	 */
 	export function onSignalChange(handler: (event: SignalChangeEvent) => void): Unsubscribe;
 	export function onSignalRead(handler: (event: SignalReadEvent) => void): Unsubscribe;
 	export function onSignalWrite(handler: (event: SignalWriteEvent) => void): Unsubscribe;
@@ -59,6 +73,32 @@ declare module 'virtual:signal-tracker' {
 	export function getRerenderFlashEnabled(): boolean;
 	export function registerFlashExclusionRoot(element: Element): Unsubscribe;
 
-	/** @internal injected into compiled Svelte output by vite-plugin-signal-tracker */
+	export function setHeatmapEnabled(enabled: boolean): void;
+	export function getHeatmapEnabled(): boolean;
+
+	export function onRedundantWrite(handler: (event: RedundantWriteEvent) => void): Unsubscribe;
+	export function getRedundantWrites(): RedundantWriteEvent[];
+	export function clearRedundantWrites(): void;
+
+	export function onEffectProfile(handler: (entry: EffectTimingEntry) => void): Unsubscribe;
+	export function getEffectTimings(): EffectTimingEntry[];
+	export function clearEffectTimings(): void;
+
+	/** @internal */
 	export function __emit(event: SignalChangeEvent): void;
+	/** @internal */
+	export function __emitRedundantWrite(event: {
+		label: string;
+		operation: string;
+		value: unknown;
+		timestamp: number;
+	}): void;
+	/** @internal */
+	export function __emitEffectTiming(event: {
+		id: string;
+		label: string | undefined;
+		kind: string;
+		duration: number;
+		timestamp: number;
+	}): void;
 }

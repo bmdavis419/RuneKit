@@ -2,11 +2,16 @@
 const _listeners = new Set();
 const _readListeners = new Set();
 const _writeListeners = new Set();
+const _redundantListeners = new Set();
+const _effectProfileListeners = new Set();
 let _active = false;
 const _stackIgnore = ['virtual:signal-tracker', '__st', 'svelte/internal/client'];
 const _flashClass = '__signal_tracker_flash';
+const _heatmapClass = '__signal_tracker_heatmap';
 let _flashStyleReady = false;
+let _heatmapStyleReady = false;
 let _rerenderFlashEnabled = true;
+let _heatmapEnabled = false;
 const _flashExclusionRoots = new Set();
 let _activeSourceLabel = undefined;
 let _activeSourceExpiresAt = 0;
@@ -17,6 +22,16 @@ const _readLabelTTL = 100;
 let _readDepth = 0;
 let _readStack = [];
 const _derivedChainCache = new Map();
+
+const _heatmapData = new WeakMap();
+const _heatmapElements = new Set();
+const _HEATMAP_WINDOW_MS = 5000;
+const _HEATMAP_DECAY_MS = 3000;
+let _heatmapRafHandle = 0;
+
+const _redundantWrites = new Map();
+const _effectTimings = new Map();
+const _EFFECT_TIMING_MAX = 200;
 
 const _isReaction = (value) => value && typeof value === 'object' && typeof value.wv === 'number';
 const _fnName = (value) =>
@@ -48,6 +63,100 @@ const _ensureFlashStyle = () => {
 		_flashClass +
 		'::after{content:attr(data-signal-tracker-source);position:absolute;left:0;top:-1.15rem;background:#fb923c;color:#111827;font:600 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;padding:1px 6px;border-radius:4px;pointer-events:none;white-space:nowrap;z-index:2147483647}';
 	document.head?.appendChild(style);
+};
+
+const _ensureHeatmapStyle = () => {
+	if (_heatmapStyleReady || typeof document === 'undefined') return;
+	_heatmapStyleReady = true;
+	const style = document.createElement('style');
+	style.setAttribute('data-signal-tracker-heatmap', 'true');
+	style.textContent = `
+.${_heatmapClass}{position:relative;outline-style:solid;outline-offset:1px;transition:outline-color .3s ease,outline-width .3s ease}
+.${_heatmapClass}::before{content:attr(data-heatmap-label);position:absolute;right:0;top:-1.1rem;background:var(--hm-color,#fb923c);color:#fff;font:600 9px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;padding:1px 5px;border-radius:3px;pointer-events:none;white-space:nowrap;z-index:2147483646;opacity:.9}`;
+	document.head?.appendChild(style);
+};
+
+const _heatColor = (intensity) => {
+	const t = Math.min(1, Math.max(0, intensity));
+	if (t < 0.33) {
+		const p = t / 0.33;
+		return `rgba(59,130,246,${0.3 + p * 0.3})`;
+	}
+	if (t < 0.66) {
+		const p = (t - 0.33) / 0.33;
+		return `rgba(${59 + Math.round(192 * p)},${130 - Math.round(60 * p)},${246 - Math.round(176 * p)},${0.6 + p * 0.2})`;
+	}
+	const p = (t - 0.66) / 0.34;
+	return `rgba(${251},${70 + Math.round(76 * (1 - p))},${60},${0.8 + p * 0.2})`;
+};
+
+const _recordHeatmapHit = (element, label) => {
+	if (!element || !_heatmapEnabled) return;
+	const now = Date.now();
+	let data = _heatmapData.get(element);
+	if (!data) {
+		data = { hits: [], label: label || '?', totalHits: 0 };
+		_heatmapData.set(element, data);
+	}
+	data.hits.push(now);
+	data.totalHits += 1;
+	if (label) data.label = label;
+	_heatmapElements.add(element);
+	_scheduleHeatmapRender();
+};
+
+const _computeHeatmapIntensity = (data, now) => {
+	const cutoff = now - _HEATMAP_WINDOW_MS;
+	data.hits = data.hits.filter((t) => t > cutoff);
+	if (data.hits.length === 0) return 0;
+	return Math.min(1, data.hits.length / 15);
+};
+
+const _renderHeatmap = () => {
+	_heatmapRafHandle = 0;
+	if (!_heatmapEnabled) {
+		for (const el of _heatmapElements) {
+			el.classList?.remove(_heatmapClass);
+			el.style?.removeProperty('outline-color');
+			el.style?.removeProperty('outline-width');
+			el.style?.removeProperty('--hm-color');
+			el.removeAttribute?.('data-heatmap-label');
+		}
+		return;
+	}
+	_ensureHeatmapStyle();
+	const now = Date.now();
+	const toRemove = [];
+	for (const el of _heatmapElements) {
+		const data = _heatmapData.get(el);
+		if (!data) {
+			toRemove.push(el);
+			continue;
+		}
+		const intensity = _computeHeatmapIntensity(data, now);
+		if (intensity <= 0) {
+			el.classList?.remove(_heatmapClass);
+			el.style?.removeProperty('outline-color');
+			el.style?.removeProperty('outline-width');
+			el.style?.removeProperty('--hm-color');
+			el.removeAttribute?.('data-heatmap-label');
+			toRemove.push(el);
+			continue;
+		}
+		const color = _heatColor(intensity);
+		el.classList?.add(_heatmapClass);
+		el.style?.setProperty('outline-color', color);
+		el.style?.setProperty('outline-width', `${1 + Math.round(intensity * 2)}px`);
+		el.style?.setProperty('--hm-color', color);
+		el.setAttribute?.('data-heatmap-label', `${data.label} ×${data.hits.length}`);
+	}
+	for (const el of toRemove) _heatmapElements.delete(el);
+	if (_heatmapElements.size > 0) _scheduleHeatmapRender();
+};
+
+const _scheduleHeatmapRender = () => {
+	if (_heatmapRafHandle || typeof requestAnimationFrame === 'undefined') return;
+	_heatmapRafHandle = requestAnimationFrame(_renderHeatmap);
 };
 
 const _toFlashElement = (value) => {
@@ -177,23 +286,12 @@ export function __finalizeDownstream(snapshot) {
 }
 
 export function __flashDomByOperation(operation, args, label) {
-	if (!_rerenderFlashEnabled) return;
 	if (typeof operation !== 'string' || !Array.isArray(args) || args.length === 0) return;
 	if (typeof label !== 'string' || label.length === 0) return;
-	if (operation === 'set_text') {
-		_flash(args[0], label);
-		return;
-	}
-	if (
-		operation === 'set_value' ||
-		operation === 'set_checked' ||
-		operation === 'set_selected' ||
-		operation === 'set_attribute' ||
-		operation === 'set_xlink_attribute' ||
-		operation === 'set_class' ||
-		operation === 'set_style'
-	) {
-		_flash(args[0], label);
+	const el = _toFlashElement(args[0]);
+	if (el) {
+		if (_rerenderFlashEnabled) _flash(args[0], label);
+		if (_heatmapEnabled) _recordHeatmapHit(el, label);
 	}
 }
 
@@ -279,10 +377,85 @@ export function __emitWrite(event) {
 	_safeEmit(_writeListeners, event);
 }
 
+export function setHeatmapEnabled(enabled) {
+	_heatmapEnabled = Boolean(enabled);
+	if (!_heatmapEnabled) _scheduleHeatmapRender();
+}
+
+export function getHeatmapEnabled() {
+	return _heatmapEnabled;
+}
+
+export function __emitRedundantWrite(event) {
+	const label = event?.label;
+	if (typeof label !== 'string' || label.length === 0) return;
+	const existing = _redundantWrites.get(label) || {
+		label,
+		count: 0,
+		lastTimestamp: 0,
+		operation: ''
+	};
+	existing.count += 1;
+	existing.lastTimestamp = event.timestamp;
+	existing.operation = event.operation;
+	_redundantWrites.set(label, existing);
+	_safeEmit(_redundantListeners, { ...existing });
+}
+
+export function onRedundantWrite(handler) {
+	_redundantListeners.add(handler);
+	return () => _redundantListeners.delete(handler);
+}
+
+export function getRedundantWrites() {
+	return [..._redundantWrites.values()];
+}
+
+export function clearRedundantWrites() {
+	_redundantWrites.clear();
+}
+
+export function __emitEffectTiming(event) {
+	const id = event?.id || 'anon';
+	const existing = _effectTimings.get(id);
+	if (existing) {
+		existing.runs.push({ duration: event.duration, timestamp: event.timestamp });
+		if (existing.runs.length > _EFFECT_TIMING_MAX)
+			existing.runs = existing.runs.slice(-_EFFECT_TIMING_MAX);
+		existing.totalRuns += 1;
+		existing.totalDuration += event.duration;
+		existing.maxDuration = Math.max(existing.maxDuration, event.duration);
+		existing.lastTimestamp = event.timestamp;
+	} else {
+		_effectTimings.set(id, {
+			id,
+			label: event.label,
+			kind: event.kind,
+			runs: [{ duration: event.duration, timestamp: event.timestamp }],
+			totalRuns: 1,
+			totalDuration: event.duration,
+			maxDuration: event.duration,
+			lastTimestamp: event.timestamp
+		});
+	}
+	_safeEmit(_effectProfileListeners, _effectTimings.get(id));
+}
+
+export function onEffectProfile(handler) {
+	_effectProfileListeners.add(handler);
+	return () => _effectProfileListeners.delete(handler);
+}
+
+export function getEffectTimings() {
+	return [..._effectTimings.values()];
+}
+
+export function clearEffectTimings() {
+	_effectTimings.clear();
+}
+
 /** @internal – injected into compiled Svelte output by vite-plugin-signal-tracker */
 export function __emit(event) {
-	// Re-entrancy guard: if the handler itself updates $state we skip that
-	// secondary emission so we don't loop.
 	if (_active) return;
 	__setActiveSourceLabel(event?.label);
 	_active = true;

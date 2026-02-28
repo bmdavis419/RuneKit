@@ -1,4 +1,8 @@
-import type { SignalMutationSource } from 'virtual:signal-tracker';
+import type {
+	EffectTimingEntry,
+	RedundantWriteEvent,
+	SignalMutationSource
+} from 'virtual:signal-tracker';
 
 export type SignalWriteOperation = SignalMutationSource['operation'];
 
@@ -50,3 +54,16 @@ export interface RuneKitDashboardProps {
 	maxHistory?: number;
 	initialTab?: 'routes' | 'endpoints' | 'remotes' | 'history';
 }
+
+export type RuneKitTab = 'signals' | 'performance' | 'routes' | 'network';
+
+export interface RuneKitProps {
+	position?: 'bottom-right' | 'bottom-left';
+	maxFeed?: number;
+	showAppSignalsOnly?: boolean;
+	initialOpen?: boolean;
+	zIndex?: number;
+	initialTab?: RuneKitTab;
+}
+
+export type { EffectTimingEntry, RedundantWriteEvent };

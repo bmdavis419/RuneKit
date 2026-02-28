@@ -50,11 +50,27 @@ import {
   __beginReadLabel as __stBeginReadLabel,
   __endReadLabel as __stEndReadLabel,
   __takeReadChain as __stTakeReadChain,
-  __sourceChain as __stSourceChain
+  __sourceChain as __stSourceChain,
+  __emitRedundantWrite as __stEmitRedundant,
+  __emitEffectTiming as __stEmitEffect
 } from '${VIRTUAL_ID}';
 
 const _isInternalLabel = (label) =>
   typeof label === 'string' && (label.startsWith('monitor_') || label.startsWith('__st'));
+
+let _effectIdCounter = 0;
+
+const _shallowEqual = (a, b) => {
+  if (Object.is(a, b)) return true;
+  if (a === null || b === null || typeof a !== typeof b) return false;
+  if (typeof a !== 'object') return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) return a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  return keysA.every((k) => Object.is(a[k], b[k]));
+};
 
 const _wrapMutation = (fn, op) => (src, ...args) => {
   if (_isInternalLabel(src?.label)) return fn(src, ...args);
@@ -64,26 +80,37 @@ const _wrapMutation = (fn, op) => (src, ...args) => {
   const _mutation = __stMutationMeta(op);
   const _downstream = __stSnapshotDownstream(src);
   const _r = fn(src, ...args);
-  if (src?.wv !== _wv && !__stIsEmitting()) {
-    const _sourceChain = __stSourceChain();
-    const _dispatch = () =>
-      __stEmit({
-        label: src?.label,
-        oldValue: _ov,
-        newValue: src?.v,
-        timestamp: Date.now(),
-        mutation: _mutation,
-        downstream: __stFinalizeDownstream(_downstream)
-      });
-    __stEmitWrite({
-      label: src?.label,
-      operation: op,
-      timestamp: Date.now(),
-      sourceChain: _sourceChain
-    });
-    if (typeof queueMicrotask === 'function') queueMicrotask(_dispatch);
-    else Promise.resolve().then(_dispatch);
+  if (src?.wv === _wv || __stIsEmitting()) {
+    if (src?.wv === _wv && src?.label && !__stIsEmitting()) {
+      if (_shallowEqual(_ov, src?.v)) {
+        __stEmitRedundant({
+          label: src.label,
+          operation: op,
+          value: _ov,
+          timestamp: Date.now()
+        });
+      }
+    }
+    return _r;
   }
+  const _sourceChain = __stSourceChain();
+  const _dispatch = () =>
+    __stEmit({
+      label: src?.label,
+      oldValue: _ov,
+      newValue: src?.v,
+      timestamp: Date.now(),
+      mutation: _mutation,
+      downstream: __stFinalizeDownstream(_downstream)
+    });
+  __stEmitWrite({
+    label: src?.label,
+    operation: op,
+    timestamp: Date.now(),
+    sourceChain: _sourceChain
+  });
+  if (typeof queueMicrotask === 'function') queueMicrotask(_dispatch);
+  else Promise.resolve().then(_dispatch);
   return _r;
 };
 
@@ -93,6 +120,21 @@ const _wrapDomOp = (fn, op) => (...args) => {
   const _chain = __stSourceChain(_readChain);
   __stFlashDomByOperation(op, args, _chain);
   return _r;
+};
+
+const _wrapEffect = (fn, kind) => (userFn, ...rest) => {
+  const _id = kind + ':' + (++_effectIdCounter);
+  const _label = userFn?.name || undefined;
+  const _wrapped = () => {
+    const _start = performance.now();
+    const _result = userFn();
+    const _dur = performance.now() - _start;
+    if (_dur > 0.01) {
+      __stEmitEffect({ id: _id, label: _label, kind, duration: _dur, timestamp: Date.now() });
+    }
+    return _result;
+  };
+  return fn(_wrapped, ...rest);
 };
 
 export * from '${ORIG_ID}';
@@ -118,6 +160,9 @@ export const get = (signal, ...args) => {
     }
   }
 };
+
+export const user_effect = _wrapEffect(__orig.user_effect, 'effect');
+export const user_pre_effect = _wrapEffect(__orig.user_pre_effect, 'pre_effect');
 
 export const set_text = _wrapDomOp(__orig.set_text, 'set_text');
 export const set_value = _wrapDomOp(__orig.set_value, 'set_value');
