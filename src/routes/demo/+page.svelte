@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 
 	// ── Rapid counter (heatmap: high-frequency DOM updates) ──
 	let count = $state(0);
@@ -98,10 +98,10 @@
 			x += Math.sin(x + val);
 		}
 		const elapsed = performance.now() - start;
-		effectLog = [
-			`[${new Date().toLocaleTimeString()}] Computed with input=${val}, took ${elapsed.toFixed(1)}ms`,
-			...effectLog
-		].slice(0, 12);
+		const entry = `[${new Date().toLocaleTimeString()}] Computed with input=${val}, took ${elapsed.toFixed(1)}ms`;
+		untrack(() => {
+			effectLog = [entry, ...effectLog].slice(0, 12);
+		});
 	});
 
 	// ── Cascading effects (effect chain) ──
